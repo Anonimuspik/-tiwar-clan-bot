@@ -38,7 +38,7 @@ function unescapeHtml(s) {
 
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
-    { time: 745,  type: 'morning' },   // ВРЕМЕННО: разовая проверка автозапуска, удали после теста
+    { time: 826,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
@@ -200,7 +200,7 @@ function morningText() {
     const t = getMsk();
     const hh = String(t.getHours()).padStart(2,'0');
     const mm = String(t.getMinutes()).padStart(2,'0');
-    return `Я Терминал [${hh}:${mm} МСК]: Доброе утро! Хорошего дня! Не забывайте ходить на сражения и пополнять казну / Good morning! Have a great day! Don't forget battles & treasury!`;
+    return `Я Терминал [${hh}:${mm} МСК]: Доброе утро! Хорошего дня! Не забывайте ходить на сражения и пополнять казну для активации и прокачки статуи / Good morning! Have a great day! Don't forget battles & treasury!`;
 }
 function nightText() {
     const t = getMsk();
