@@ -824,7 +824,7 @@ async function banPlayer(page, targetNick, data) {
 
     const RUN_MS = 340 * 60 * 1000;
     const endAt  = Date.now() + RUN_MS;
-    const TICK   = 60 * 1000; // проверяем каждую минуту
+    const TICK   = 5 * 1000; // проверяем каждые 5 секунд
 
     while (Date.now() < endAt) {
         const now = getMsk();
@@ -864,7 +864,7 @@ async function banPlayer(page, targetNick, data) {
         }
 
         // ── Проверка почты каждые 5 минут ────────────────────────────────────
-        const mailKey = `${dateKey}_mail_${Math.floor(hhmm / 5)}`;
+        const mailKey = `${dateKey}_mail_${Math.floor(Date.now() / 5000)}`;
         if (!sentToday.has(mailKey)) {
             sentToday.add(mailKey);
             await checkMail(page, data);
