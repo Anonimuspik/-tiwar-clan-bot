@@ -484,6 +484,31 @@ async function fetchAllLiveExp(page) {
     return expMap;
 }
 
+// Получаем ранги всех игроков клана прямо с сайта (для /топ когда data.members пустой)
+async function fetchClanRanks(page) {
+    console.log('[clan-ranks] Получаем ранги игроков с сайта...');
+    const rankMap = {}; // nick → gameRank
+    let pageNum = 1;
+    while (true) {
+        const url = pageNum === 1 ? `${BASE_URL}/clan/${CLAN_ID}/` : `${BASE_URL}/clan/${CLAN_ID}//${pageNum}`;
+        await navigate(page, url, 1500);
+        const html = await pageHtml(page);
+        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>\s*<img[^>]*>((?:[^<,]|<span[^>]*>[^<]*<\/span>)*),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
+        let match, found = 0;
+        while ((match = memberRegex.exec(html)) !== null) {
+            const nick = match[2].replace(/<[^>]+>/g, '').trim();
+            const rank = match[3].trim();
+            if (nick && nick !== BOT_NICK) { rankMap[nick] = rank; found++; }
+        }
+        console.log(`[clan-ranks] Страница ${pageNum}: найдено ${found}`);
+        const hasNext = html.includes(`/clan/${CLAN_ID}//${pageNum + 1}`);
+        if (!hasNext || found === 0) break;
+        pageNum++;
+    }
+    console.log(`[clan-ranks] Всего рангов: ${Object.keys(rankMap).length}`);
+    return rankMap;
+}
+
 async function processCommand(msg, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
 
@@ -535,23 +560,34 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (botRank >= 1) {
         if (msg.includes('/топ')) {
             console.log('[cmd] → /топ');
-            // Собираем живой опыт, обновляем память, НЕ пишем в Gist
+            // 1. Живой опыт
             const liveMap = await fetchAllLiveExp(page);
             const today = todayKey();
             for (const [nick, exp] of Object.entries(liveMap)) {
                 if (!data.weeklyExp[nick]) data.weeklyExp[nick] = {};
                 data.weeklyExp[nick][today] = exp;
             }
-            // Возвращаемся на диалог
+            // 2. Ранги с сайта (чтобы % был у всех, даже если data.members пустой)
+            const rankMap = await fetchClanRanks(page);
+            // Обновляем data.members рангами (без isNew — они уже в клане)
+            for (const [nick, rank] of Object.entries(rankMap)) {
+                if (!data.members[nick]) {
+                    data.members[nick] = { gameRank: rank, botRank: 0, joinedTracking: today, isNew: false };
+                } else {
+                    data.members[nick].gameRank = rank;
+                }
+            }
+            // 3. Возвращаемся на диалог
             await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
-            // Строим топ из живых данных — все кто фармил сегодня + остальные из памяти
+            // 4. Строим топ — все у кого есть опыт
             const allNicks = new Set([...Object.keys(liveMap), ...Object.keys(data.members)]);
             const ranked = [...allNicks]
                 .filter(nick => nick !== BOT_NICK)
                 .map(nick => {
                     const exp = getPlayerWeeklyExp(nick, data);
                     const mem = data.members[nick];
-                    const req = mem ? getRequirements(mem.gameRank) : null;
+                    const gameRank = mem ? mem.gameRank : null;
+                    const req = gameRank ? getRequirements(gameRank) : null;
                     const weeklyNorm = (req && req.expPerDay > 0) ? req.expPerDay * 7 : 0;
                     const pct = weeklyNorm > 0 ? Math.round((exp / weeklyNorm) * 100) : null;
                     return { nick, exp, pct };
@@ -560,41 +596,42 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
                 .sort((a, b) => b.exp - a.exp);
             if (!ranked.length) return 'Данных пока нет.';
             const lines = ranked.map((r, i) => {
-                // Показываем % всем у кого есть норма по опыту (pct !== null)
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
                 return `${i+1}. ${r.nick} - ${r.exp.toLocaleString()}${pctStr}`;
             });
-            // Отправляем по частям, каждая ≤ 590 символов
+            // 5. Отправляем по частям ≤ 590 символов
             let chunk = 'Топ клана за неделю:';
-            let isFirst = true;
             for (const line of lines) {
-                const candidate = chunk + '\n' + line;
-                if (candidate.length > 590) {
-                    // Текущий chunk полный — отправляем
+                if ((chunk + '\n' + line).length > 590) {
                     await sendMailReplyOnPage(page, userId, chunk);
                     await page.waitForTimeout(3000);
                     await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
                     chunk = line;
-                    isFirst = false;
                 } else {
-                    chunk = candidate;
+                    chunk += '\n' + line;
                 }
             }
-            // Отправляем остаток
-            if (chunk) {
-                if (!isFirst) {
-                    // Уже было как минимум одно отправление, навигация уже на месте
-                }
-                await sendMailReplyOnPage(page, userId, chunk);
-            }
+            if (chunk) await sendMailReplyOnPage(page, userId, chunk);
             return null;
         }
         if (msg.includes('/статистика')) {
             console.log('[cmd] → /статистика');
             const targetNick = msg.replace('/статистика', '').trim();
             if (!targetNick) return 'Укажите ник: /статистика Ник';
-            const target = data.members[targetNick];
-            if (!target) return `Игрок "${targetNick}" не найден в клане.`;
+            // Ищем сначала в базе, потом прямо на сайте
+            let target = data.members[targetNick];
+            if (!target) {
+                console.log(`[cmd] /статистика: "${targetNick}" не в базе, ищем на сайте...`);
+                const rankMap = await fetchClanRanks(page);
+                if (rankMap[targetNick]) {
+                    data.members[targetNick] = { gameRank: rankMap[targetNick], botRank: 0, joinedTracking: todayKey(), isNew: false };
+                    target = data.members[targetNick];
+                    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+                } else {
+                    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+                    return `Игрок "${targetNick}" не найден в клане.`;
+                }
+            }
             const exp = getPlayerWeeklyExp(targetNick, data);
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const req = getRequirements(target.gameRank);
@@ -698,7 +735,8 @@ async function collectMembers(page, data) {
         const html = await pageHtml(page);
 
         // Парсим ник: может содержать <span class="not_here white">'</span> внутри (напр. Tsukiyama')
-        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>[^<]*<img[^>]*>((?:[^<]|<span[^>]*>[^<]*<\/span>)+?),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
+        // Ник — всё до запятой после img-тега (включая многословные ники типа "Дикая Ягода")
+        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>\s*<img[^>]*>((?:[^<,]|<span[^>]*>[^<]*<\/span>)*),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
         let match, found = 0;
         while ((match = memberRegex.exec(html)) !== null) {
             const userId = match[1];
