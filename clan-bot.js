@@ -544,14 +544,21 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             }
             // Возвращаемся на диалог
             await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
-            const members = Object.keys(data.members).filter(n => !data.members[n].isNew);
-            const ranked = members.map(nick => {
-                const exp = getPlayerWeeklyExp(nick, data);
-                const req = getRequirements(data.members[nick].gameRank);
-                const weeklyNorm = req.expPerDay * 7;
-                const pct = weeklyNorm ? Math.round((exp / weeklyNorm) * 100) : null;
-                return { nick, exp, pct };
-            }).sort((a, b) => b.exp - a.exp).slice(0, 15);
+            // Строим топ из живых данных — все кто фармил сегодня + остальные из памяти
+            const allNicks = new Set([...Object.keys(liveMap), ...Object.keys(data.members)]);
+            const ranked = [...allNicks]
+                .filter(nick => nick !== BOT_NICK)
+                .map(nick => {
+                    const exp = getPlayerWeeklyExp(nick, data);
+                    const member = data.members[nick];
+                    const req = member ? getRequirements(member.gameRank) : null;
+                    const weeklyNorm = req ? req.expPerDay * 7 : 0;
+                    const pct = weeklyNorm ? Math.round((exp / weeklyNorm) * 100) : null;
+                    return { nick, exp, pct };
+                })
+                .filter(r => r.exp > 0)
+                .sort((a, b) => b.exp - a.exp)
+                .slice(0, 15);
             if (!ranked.length) return 'Данных пока нет.';
             const lines = ranked.map((r, i) => {
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
