@@ -26,6 +26,7 @@ function todayKey() {
 
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
+    { time: 745,  type: 'morning' },   // ВРЕМЕННО: разовая проверка автозапуска, удали после теста
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
@@ -36,6 +37,11 @@ const SCHEDULE = [
     { time: 2335, type: 'collect_members' },
     { time: 2350, type: 'collect_exp' },
 ];
+
+// Переводит HHMM (например 1430) в минуты от начала суток (870)
+function hhmmToMinutes(t) {
+    return Math.floor(t / 100) * 60 + (t % 100);
+}
 
 const RANK_REQUIREMENTS = {
     'Лидер клана': { expPerDay: 0,      battlesPerWeek: 30 },
@@ -926,8 +932,10 @@ async function banPlayer(page, targetNick, data) {
     console.log(`[ban] Переходим на ADM: ${admUrl}`);
     await navigate(page, admUrl, 2000);
 
-    // Шаг 2: ищем userId игрока по страницам клана
-    // HTML структура: <a href="/user/ID/"><img ...>НИК[апостроф-спан?], <span class="white">РАНГ
+    // Шаг 2: ищем userId игрока по страницам клана.
+    // После визита на ADM ссылки на управление каждым игроком выглядят так:
+    // <a href="/clan/41140/redact/ID/"><img ...>НИК[<span>'</span>]?, <span class="white">РАНГ
+    // Берём userId прямо из этой ссылки — он и нужен для шага 3.
     let targetId = null;
     let pageNum = 1;
     while (!targetId) {
@@ -938,25 +946,24 @@ async function banPlayer(page, targetNick, data) {
         console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" ${nickFound ? 'НАЙДЕН' : 'нет'}`);
         if (nickFound) {
             const escapedNick = targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Паттерн учитывает img перед ником и апостроф-спан после
-            // href="/user/ID/"><img ...>НИК[<span>'</span>]?,
+            // href="/clan/41140/redact/ID/"><img ...>НИК[<span>'</span>]?,
             const userRegex = new RegExp(
-                `href="/user/(\\d+)/"[^>]*><img[^>]*>` +
+                `href="/clan/${CLAN_ID}/redact/(\\d+)/"[^>]*><img[^>]*>` +
                 escapedNick + `(?:<span[^>]*>[^<]*<\/span>)?\\s*,`,
                 'g'
             );
             const userMatches = [...html.matchAll(userRegex)];
-            console.log(`[ban] Совпадений userId: ${userMatches.length}`);
+            console.log(`[ban] Совпадений userId (redact): ${userMatches.length}`);
             if (userMatches.length > 0) {
                 targetId = userMatches[0][1];
                 console.log(`[ban] userId=${targetId}`);
                 break;
             }
-            // Запасной: ищем просто /user/ID/ рядом с ником в радиусе 100 символов
+            // Запасной: ищем любой /clan/.../redact/ID/ рядом с ником в радиусе 150 символов
             const idx = html.indexOf('>' + targetNick);
             if (idx > -1) {
                 const nearby = html.substring(Math.max(0, idx - 150), idx + 50);
-                const idMatch = nearby.match(/href="\/user\/(\d+)\/"/);
+                const idMatch = nearby.match(new RegExp(`/clan/${CLAN_ID}/redact/(\\d+)/`));
                 if (idMatch) {
                     targetId = idMatch[1];
                     console.log(`[ban] userId=${targetId} (запасной метод)`);
@@ -1029,18 +1036,19 @@ async function banPlayer(page, targetNick, data) {
     const page = await context.newPage();
 
     const data = await loadData();
-    const sentToday = new Set(); // сбрасываем при каждом запуске — announcements из Gist не загружаем чтобы не пропускать
+    data.announcements = data.announcements || {};
 
     const RUN_MS = 340 * 60 * 1000;
     const endAt  = Date.now() + RUN_MS;
     const TICK   = 5 * 1000;
     let lastExpRefresh = 0;
+    const CATCHUP_WINDOW_MIN = 90; // если бот не успел в момент X, всё равно отправит, если прошло не больше 90 мин
 
     console.log(`[clan-bot] Буду работать до: ${new Date(endAt).toISOString()}`);
 
     while (Date.now() < endAt) {
         const now = getMsk();
-        const hhmm = now.getHours() * 100 + now.getMinutes();
+        const nowMin = now.getHours() * 60 + now.getMinutes();
         const dow  = now.getDay();
         const dateKey = todayKey();
 
@@ -1063,11 +1071,19 @@ async function banPlayer(page, targetNick, data) {
 
         for (const item of SCHEDULE) {
             const key = `${dateKey}_${item.type}_${item.time}`;
-            if (hhmm >= item.time && hhmm < item.time + 5 && !sentToday.has(key)) {
-                sentToday.add(key);
-                data.announcements = data.announcements || {};
+            const itemMin = hhmmToMinutes(item.time);
+            const lateBy = nowMin - itemMin; // сколько минут прошло с момента, когда задача должна была сработать
+
+            // Флаг "отправлено" хранится в Gist (data.announcements), а не в памяти —
+            // значит переживает перезапуск GitHub Actions. Догоняем задачу, если прошло
+            // не больше CATCHUP_WINDOW_MIN минут с назначенного времени и она ещё не выполнена.
+            if (!data.announcements[key] && lateBy >= 0 && lateBy <= CATCHUP_WINDOW_MIN) {
+                // Сразу помечаем и сохраняем в Gist ДО выполнения — чтобы параллельный
+                // запуск (если такой всё же возник) не отправил то же самое дважды.
                 data.announcements[key] = true;
-                console.log(`[schedule] Выполняем задачу: ${item.type} (${item.time})`);
+                await saveData(data);
+
+                console.log(`[schedule] Выполняем задачу: ${item.type} (${item.time}), опоздание: ${lateBy} мин`);
 
                 if (item.type === 'morning') {
                     await sendAnnouncement(page, morningText());
@@ -1085,6 +1101,7 @@ async function banPlayer(page, targetNick, data) {
                 for (const k of Object.keys(data.announcements)) {
                     if (!k.startsWith(dateKey)) delete data.announcements[k];
                 }
+                await saveData(data);
             }
         }
 
