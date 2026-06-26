@@ -24,6 +24,18 @@ function todayKey() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+// Страница в XHTML — амперсанды в href всегда экранированы как &amp; (и т.п.).
+// Перед навигацией по извлечённой регуляркой ссылке ОБЯЗАТЕЛЬНО раскодировать,
+// иначе вместо двух параметров (?conf=X&yes=1) уйдёт один склеенный (?conf=X&amp;yes=1).
+function unescapeHtml(s) {
+    return s
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+}
+
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
     { time: 745,  type: 'morning' },   // ВРЕМЕННО: разовая проверка автозапуска, удали после теста
@@ -925,10 +937,10 @@ async function banPlayer(page, targetNick, data) {
         console.log(`[ban] ADM ссылка не найдена — нет прав`);
         return `Нет прав для исключения игроков.`;
     }
-    const admBase = admMatch[1].replace(/\?.*$/, ''); // убираем ?r=... из базового пути
-    // admBase вида /clan/41140/5/adm/  — берём только /clan/41140/
+    const admHref = unescapeHtml(admMatch[1]);
+    // admHref вида /clan/41140/5/adm/?r=...
     // Нам нужно просто зайти на ADM, там будет список с redact-ссылками
-    const admUrl = BASE_URL + admMatch[1];
+    const admUrl = BASE_URL + admHref;
     console.log(`[ban] Переходим на ADM: ${admUrl}`);
     await navigate(page, admUrl, 2000);
 
@@ -991,8 +1003,9 @@ async function banPlayer(page, targetNick, data) {
         console.log(`[ban] Кнопка исключения не найдена. HTML: ${html.substring(0, 300)}`);
         return `Не удалось найти кнопку исключения для ${targetNick}.`;
     }
-    console.log(`[ban] Кнопка исключения: ${deleteMatch[1]}`);
-    await navigate(page, BASE_URL + deleteMatch[1], 2000);
+    const deleteHref = unescapeHtml(deleteMatch[1]);
+    console.log(`[ban] Кнопка исключения: ${deleteHref}`);
+    await navigate(page, BASE_URL + deleteHref, 2000);
 
     // Шаг 5: подтверждаем "Да, уверен"
     html = await pageHtml(page);
@@ -1001,11 +1014,24 @@ async function banPlayer(page, targetNick, data) {
         console.log(`[ban] Кнопка подтверждения не найдена`);
         return `Ошибка подтверждения исключения.`;
     }
-    console.log(`[ban] Подтверждаем: ${confirmMatch[1]}`);
-    await navigate(page, BASE_URL + confirmMatch[1], 2000);
+    const confirmHref = unescapeHtml(confirmMatch[1]);
+    console.log(`[ban] Подтверждаем: ${confirmHref}`);
+    await navigate(page, BASE_URL + confirmHref, 2000);
+
+    // Шаг 6: проверяем, что игрок действительно исключён, а не просто залогировали "успешно"
+    const checkHtml = await pageHtml(page);
+    const stillThere = checkHtml.includes(targetNick);
+    if (stillThere) {
+        console.log(`[ban] ВНИМАНИЕ: после подтверждения ник "${targetNick}" всё ещё встречается на странице — исключение, похоже, НЕ сработало`);
+    }
 
     delete data.members[targetNick];
     await saveData(data);
+
+    if (stillThere) {
+        console.log(`[ban] ${targetNick} — подтверждение не дало результата`);
+        return `Не удалось подтвердить исключение ${targetNick} — проверьте вручную, возможно ссылка была неверной.`;
+    }
     console.log(`[ban] ${targetNick} исключён успешно`);
     return `Игрок ${targetNick} исключён из клана.`;
 }
