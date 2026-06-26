@@ -606,7 +606,8 @@ async function collectExp(page, data) {
         await navigate(page, url);
         const html = await pageHtml(page);
 
-        const expRegex = /href="\/user\/(\d+)\/">([\w\s\-А-Яа-яёЁ']+)<\/a>\s*<b>([\d\s']+)<\/b>/g;
+        // Учитываем <span class="not_here">'</span> между </a> и <b> (офлайн игроки)
+        const expRegex = /href="\/user\/(\d+)\/">([\w\s\-А-Яа-яёЁ']+)<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
         let match, found = 0;
         while ((match = expRegex.exec(html)) !== null) {
             const nick = match[2].trim(), exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
