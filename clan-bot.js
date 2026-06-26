@@ -389,7 +389,8 @@ async function sendMailReplyOnPage(page, userId, text) {
         }
     }
     console.log(`[reply] textarea найдена, вводим текст: "${text.substring(0,60)}"`);
-    await textarea.fill(text);
+    await textarea.click();
+    await textarea.evaluate((el, val) => { el.value = val; el.dispatchEvent(new Event('input', {bubbles:true})); }, text);
     const sendBtn = await page.$('input[name="send_message"]');
     if (sendBtn) {
         await sendBtn.click();
