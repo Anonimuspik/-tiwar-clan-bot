@@ -550,32 +550,43 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
                 .filter(nick => nick !== BOT_NICK)
                 .map(nick => {
                     const exp = getPlayerWeeklyExp(nick, data);
-                    const member = data.members[nick];
-                    const req = member ? getRequirements(member.gameRank) : null;
-                    const weeklyNorm = req ? req.expPerDay * 7 : 0;
-                    const pct = weeklyNorm ? Math.round((exp / weeklyNorm) * 100) : null;
+                    const mem = data.members[nick];
+                    const req = mem ? getRequirements(mem.gameRank) : null;
+                    const weeklyNorm = (req && req.expPerDay > 0) ? req.expPerDay * 7 : 0;
+                    const pct = weeklyNorm > 0 ? Math.round((exp / weeklyNorm) * 100) : null;
                     return { nick, exp, pct };
                 })
                 .filter(r => r.exp > 0)
-                .sort((a, b) => b.exp - a.exp)
-                .slice(0, 15);
+                .sort((a, b) => b.exp - a.exp);
             if (!ranked.length) return 'Данных пока нет.';
             const lines = ranked.map((r, i) => {
+                // Показываем % всем у кого есть норма по опыту (pct !== null)
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
                 return `${i+1}. ${r.nick} - ${r.exp.toLocaleString()}${pctStr}`;
             });
+            // Отправляем по частям, каждая ≤ 590 символов
             let chunk = 'Топ клана за неделю:';
+            let isFirst = true;
             for (const line of lines) {
-                if ((chunk + '\n' + line).length > 590) {
+                const candidate = chunk + '\n' + line;
+                if (candidate.length > 590) {
+                    // Текущий chunk полный — отправляем
                     await sendMailReplyOnPage(page, userId, chunk);
                     await page.waitForTimeout(3000);
                     await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
                     chunk = line;
+                    isFirst = false;
                 } else {
-                    chunk += '\n' + line;
+                    chunk = candidate;
                 }
             }
-            if (chunk) await sendMailReplyOnPage(page, userId, chunk);
+            // Отправляем остаток
+            if (chunk) {
+                if (!isFirst) {
+                    // Уже было как минимум одно отправление, навигация уже на месте
+                }
+                await sendMailReplyOnPage(page, userId, chunk);
+            }
             return null;
         }
         if (msg.includes('/статистика')) {
