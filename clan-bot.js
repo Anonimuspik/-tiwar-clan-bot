@@ -408,6 +408,35 @@ async function checkUserClan(page, userId) {
     return found;
 }
 
+// ── Живой опыт (по запросу) ───────────────────────────────────────────────────
+
+async function fetchLiveExp(page, senderNick) {
+    console.log(`[live-exp] Ищем живой опыт для "${senderNick}" на сайте...`);
+    let pageNum = 1;
+    while (true) {
+        const url = pageNum === 1
+            ? `${BASE_URL}/clan/${CLAN_ID}/clanexp/today`
+            : `${BASE_URL}/clan/${CLAN_ID}/clanexp/today/${pageNum}`;
+        await navigate(page, url, 1500);
+        const html = await pageHtml(page);
+        const expRegex = /href="\/user\/(\d+)\/">([^<]+?)(?:<span[^>]*>[^<]*<\/span>)*<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        let match;
+        while ((match = expRegex.exec(html)) !== null) {
+            const nick = match[2].trim();
+            if (nick === senderNick) {
+                const exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
+                console.log(`[live-exp] Найден: ${nick} = ${exp.toLocaleString()}`);
+                return exp;
+            }
+        }
+        const hasNext = html.includes(`/clanexp/today/${pageNum + 1}`);
+        if (!hasNext) break;
+        pageNum++;
+    }
+    console.log(`[live-exp] "${senderNick}" не найден на страницах опыта`);
+    return null;
+}
+
 // ── Команды ───────────────────────────────────────────────────────────────────
 
 async function processCommand(msg, senderNick, userId, botRank, member, data, page) {
@@ -421,13 +450,28 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (msg.includes('/мой опыт')) {
         console.log('[cmd] → /мой опыт');
         if (!member) return 'Вы не найдены в базе данных клана.';
-        const exp = getPlayerWeeklyExp(senderNick, data);
+        // Идём на сайт и берём живой опыт за сегодня
+        const todayExp = await fetchLiveExp(page, senderNick);
+        // Суммируем с остальными днями недели (кроме сегодня из кэша)
+        const today = todayKey();
+        const storedExp = data.weeklyExp[senderNick] || {};
+        const weekOtherDays = getWeekDates()
+            .filter(d => d !== today)
+            .reduce((s, d) => s + (storedExp[d] || 0), 0);
+        const exp = weekOtherDays + (todayExp ?? 0);
+        // Сохраняем живой опыт в базу
+        if (todayExp !== null) {
+            if (!data.weeklyExp[senderNick]) data.weeklyExp[senderNick] = {};
+            data.weeklyExp[senderNick][today] = todayExp;
+        }
         const req = getRequirements(member.gameRank);
         const weeklyNorm = req.expPerDay * 7;
+        // Возвращаемся на диалог после fetchLiveExp
+        await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
         if (!req.expPerDay) return `Опыт за неделю: ${exp.toLocaleString()}\nДля вашего ранга ограничений по опыту нет.`;
         const pct = Math.round((exp / weeklyNorm) * 100);
         const left = Math.max(0, weeklyNorm - exp);
-        return `Ваш опыт за неделю: ${exp.toLocaleString()}\nНорма: ${weeklyNorm.toLocaleString()}\nВыполнено: ${pct}%\n` +
+        return `Опыт за неделю: ${exp.toLocaleString()}\nНорма: ${weeklyNorm.toLocaleString()}\nВыполнено: ${pct}%\n` +
                (left > 0 ? `Осталось: ${left.toLocaleString()}` : 'Норма выполнена!');
     }
 
