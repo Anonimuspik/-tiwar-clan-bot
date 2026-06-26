@@ -234,8 +234,8 @@ function formatQuestion(q, lang, index, total) {
         : `Question ${index}/${total}:\n${d.q}\n\n`;
     const answers = d.a.join('\n');
     const timer = lang === 'ru'
-        ? '\n\n⏱ На ответ — 2 минуты. Напишите букву ответа (а/б/в/г)'
-        : '\n\n⏱ You have 2 minutes to answer. Type the letter (a/b/c/d)';
+        ? '\n\n⏱ На ответ — 2 минуты.\nНапишите букву: а(a) / б(b) / в(v) / г(g)\n⚠ Если следующий ответ — та же буква, напишите латинскую (игра блокирует одинаковые сообщения подряд)'
+        : '\n\n⏱ 2 minutes to answer.\nType the letter: a(а) / b(б) / v(в) / g(г)\n⚠ If next answer is the same letter, use the Latin version (the game blocks identical messages in a row)';
     return prefix + answers + timer;
 }
 
