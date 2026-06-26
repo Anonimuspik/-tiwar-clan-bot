@@ -494,24 +494,9 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (msg.includes('/мой опыт')) {
         console.log('[cmd] → /мой опыт');
         if (!member) return 'Вы не найдены в базе данных клана.';
-        // Идём на сайт и берём живой опыт за сегодня
-        const todayExp = await fetchLiveExp(page, senderNick);
-        // Суммируем с остальными днями недели (кроме сегодня из кэша)
-        const today = todayKey();
-        const storedExp = data.weeklyExp[senderNick] || {};
-        const weekOtherDays = getWeekDates()
-            .filter(d => d !== today)
-            .reduce((s, d) => s + (storedExp[d] || 0), 0);
-        const exp = weekOtherDays + (todayExp ?? 0);
-        // Сохраняем живой опыт в базу
-        if (todayExp !== null) {
-            if (!data.weeklyExp[senderNick]) data.weeklyExp[senderNick] = {};
-            data.weeklyExp[senderNick][today] = todayExp;
-        }
+        const exp = getPlayerWeeklyExp(senderNick, data);
         const req = getRequirements(member.gameRank);
         const weeklyNorm = req.expPerDay * 7;
-        // Возвращаемся на диалог после fetchLiveExp
-        await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
         if (!req.expPerDay) return `Опыт за неделю: ${exp.toLocaleString()}\nДля вашего ранга ограничений по опыту нет.`;
         const pct = Math.round((exp / weeklyNorm) * 100);
         const left = Math.max(0, weeklyNorm - exp);
@@ -549,36 +534,29 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (botRank >= 1) {
         if (msg.includes('/топ')) {
             console.log('[cmd] → /топ');
-            // Берём живой опыт за сегодня для всех
-            const liveExpMap = await fetchAllLiveExp(page);
+            // Собираем живой опыт, обновляем память, НЕ пишем в Gist
+            const liveMap = await fetchAllLiveExp(page);
             const today = todayKey();
-            // Обновляем кэш
-            for (const [nick, exp] of Object.entries(liveExpMap)) {
+            for (const [nick, exp] of Object.entries(liveMap)) {
                 if (!data.weeklyExp[nick]) data.weeklyExp[nick] = {};
                 data.weeklyExp[nick][today] = exp;
             }
-            // Считаем полный недельный опыт для каждого
-            const members = Object.keys(data.members).filter(n => !data.members[n].isNew);
-            const ranked = members.map(nick => {
-                const storedExp = data.weeklyExp[nick] || {};
-                const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
-                const todayExp = liveExpMap[nick] ?? storedExp[today] ?? 0;
-                const totalExp = weekOther + todayExp;
-                const req = getRequirements(data.members[nick].gameRank);
-                const weeklyNorm = req.expPerDay * 7;
-                const pct = weeklyNorm ? Math.round((totalExp / weeklyNorm) * 100) : null;
-                return { nick, totalExp, pct };
-            }).sort((a, b) => b.totalExp - a.totalExp).slice(0, 10);
             // Возвращаемся на диалог
             await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+            const members = Object.keys(data.members).filter(n => !data.members[n].isNew);
+            const ranked = members.map(nick => {
+                const exp = getPlayerWeeklyExp(nick, data);
+                const req = getRequirements(data.members[nick].gameRank);
+                const weeklyNorm = req.expPerDay * 7;
+                const pct = weeklyNorm ? Math.round((exp / weeklyNorm) * 100) : null;
+                return { nick, exp, pct };
+            }).sort((a, b) => b.exp - a.exp).slice(0, 15);
             if (!ranked.length) return 'Данных пока нет.';
-            // Личные сообщения: лимит ~600 символов. Разбиваем на куски по 500.
             const lines = ranked.map((r, i) => {
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
-                return `${i+1}. ${r.nick} - ${r.totalExp.toLocaleString()}${pctStr}`;
+                return `${i+1}. ${r.nick} - ${r.exp.toLocaleString()}${pctStr}`;
             });
-            const header = 'Топ клана за неделю:';
-            let chunk = header;
+            let chunk = 'Топ клана за неделю:';
             for (const line of lines) {
                 if ((chunk + '\n' + line).length > 590) {
                     await sendMailReplyOnPage(page, userId, chunk);
@@ -598,22 +576,11 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             if (!targetNick) return 'Укажите ник: /статистика Ник';
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден в клане.`;
-            // Живой опыт за сегодня
-            const todayExp = await fetchLiveExp(page, targetNick);
-            const today = todayKey();
-            if (todayExp !== null) {
-                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
-                data.weeklyExp[targetNick][today] = todayExp;
-            }
-            const storedExp = data.weeklyExp[targetNick] || {};
-            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
-            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
+            const exp = getPlayerWeeklyExp(targetNick, data);
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const req = getRequirements(target.gameRank);
             const expPct = req.expPerDay ? Math.round((exp/(req.expPerDay*7))*100) : null;
             const batPct = Math.round((battles/req.battlesPerWeek)*100);
-            // Возвращаемся на диалог
-            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
             const expLine = req.expPerDay
                 ? `Опыт: ${exp.toLocaleString()} / ${(req.expPerDay*7).toLocaleString()} (${expPct}%)`
                 : `Опыт: ${exp.toLocaleString()} (без нормы)`;
@@ -631,17 +598,8 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const targetNick = msg.replace('/напомни', '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
-            // Живой опыт
-            const todayExp = await fetchLiveExp(page, targetNick);
-            const today = todayKey();
-            if (todayExp !== null) {
-                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
-                data.weeklyExp[targetNick][today] = todayExp;
-            }
-            const storedExp = data.weeklyExp[targetNick] || {};
-            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
-            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
             const req = getRequirements(target.gameRank);
+            const exp = getPlayerWeeklyExp(targetNick, data);
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const reminderText = `Привет! Напоминание о норме клана:\nОпыт: ${exp.toLocaleString()} / ${(req.expPerDay*7).toLocaleString()}\nСражения: ${battles} / ${req.battlesPerWeek}\nПостарайся выполнить норму до конца недели!`;
             await sendMail(page, target.userId, reminderText);
@@ -662,16 +620,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const targetNick = msg.replace('/предупреждение', '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
-            // Живой опыт
-            const todayExp = await fetchLiveExp(page, targetNick);
-            const today = todayKey();
-            if (todayExp !== null) {
-                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
-                data.weeklyExp[targetNick][today] = todayExp;
-            }
-            const storedExp = data.weeklyExp[targetNick] || {};
-            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
-            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
+            const exp = getPlayerWeeklyExp(targetNick, data);
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const warnText = `Официальное предупреждение!\nВы не выполняете нормы клана.\nОпыт: ${exp.toLocaleString()}\nСражения: ${battles}\nПовысьте активность, иначе вас могут исключить.`;
             await sendMail(page, target.userId, warnText);
@@ -942,6 +891,7 @@ async function banPlayer(page, targetNick, data) {
     const RUN_MS = 340 * 60 * 1000;
     const endAt  = Date.now() + RUN_MS;
     const TICK   = 5 * 1000;
+    let lastExpRefresh = 0;
 
     console.log(`[clan-bot] Буду работать до: ${new Date(endAt).toISOString()}`);
 
@@ -950,6 +900,23 @@ async function banPlayer(page, targetNick, data) {
         const hhmm = now.getHours() * 100 + now.getMinutes();
         const dow  = now.getDay();
         const dateKey = todayKey();
+
+        // Раз в час обновляем опыт в памяти (без записи в Gist)
+        if (Date.now() - lastExpRefresh > 60 * 60 * 1000) {
+            try {
+                console.log('[exp-refresh] Обновляем опыт в памяти...');
+                const liveMap = await fetchAllLiveExp(page);
+                const today = todayKey();
+                for (const [nick, exp] of Object.entries(liveMap)) {
+                    if (!data.weeklyExp[nick]) data.weeklyExp[nick] = {};
+                    data.weeklyExp[nick][today] = exp;
+                }
+                lastExpRefresh = Date.now();
+                console.log(`[exp-refresh] Обновлено ${Object.keys(liveMap).length} игроков`);
+            } catch(e) {
+                console.log('[exp-refresh] Ошибка:', e.message);
+            }
+        }
 
         for (const item of SCHEDULE) {
             const key = `${dateKey}_${item.type}_${item.time}`;
