@@ -38,7 +38,7 @@ function unescapeHtml(s) {
 
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
-    { time: 830,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
+    { time: 835,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
@@ -169,7 +169,11 @@ async function sendAnnouncement(page, text) {
         const closeMatch = admHtml.match(/href="([^"]*close_clan_msg=true[^"]*)"/);
         if (closeMatch) {
             const closeHref = unescapeHtml(closeMatch[1]);
-            const closeUrl = closeHref.startsWith('http') ? closeHref : BASE_URL + (closeHref.startsWith('/') ? closeHref : admUrl.split('?')[0] + closeHref);
+            const closeUrl = closeHref.startsWith('http')
+                ? closeHref
+                : closeHref.startsWith('/')
+                    ? BASE_URL + closeHref
+                    : admUrl.split('?')[0] + closeHref; // admUrl уже содержит https://tiwar.ru — BASE_URL тут не добавляем
             await navigate(page, closeUrl, 1500);
             // После закрытия возвращаемся на страницу управления заново
             await navigate(page, admUrl, 1500);
