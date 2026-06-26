@@ -680,7 +680,20 @@ async function processCommand(msg, msgOrig, senderNick, userId, botRank, member,
             const text = msgOrig.replace(/\/сделай объявление/i, '').trim();
             if (!text) return 'Напишите текст: /сделай объявление текст';
             await sendAnnouncement(page, text);
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
             return 'Объявление отправлено.';
+        }
+        if (msg.includes('/утро')) {
+            console.log('[cmd] → /утро (ручное)');
+            await sendAnnouncement(page, morningText());
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+            return 'Утреннее объявление отправлено.';
+        }
+        if (msg.includes('/ночь')) {
+            console.log('[cmd] → /ночь (ручное)');
+            await sendAnnouncement(page, nightText());
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+            return 'Ночное объявление отправлено.';
         }
         if (msg.includes('/предупреждение')) {
             console.log('[cmd] → /предупреждение');
@@ -913,43 +926,43 @@ async function banPlayer(page, targetNick, data) {
     console.log(`[ban] Переходим на ADM: ${admUrl}`);
     await navigate(page, admUrl, 2000);
 
-    // Шаг 2: ищем userId игрока — берём со страниц /clan/41140//N
-    // HTML: <a href="/user/ID/">НИК[span?], <span class="white">РАНГ</span>
+    // Шаг 2: ищем userId игрока по страницам клана
+    // HTML структура: <a href="/user/ID/"><img ...>НИК[апостроф-спан?], <span class="white">РАНГ
     let targetId = null;
     let pageNum = 1;
     while (!targetId) {
         const url = pageNum === 1 ? `${BASE_URL}/clan/${CLAN_ID}/` : `${BASE_URL}/clan/${CLAN_ID}//${pageNum}`;
         await navigate(page, url, 1500);
         html = await pageHtml(page);
-        if (html.includes(targetNick)) {
-            // Ищем userId через href="/user/ID/">НИК — ник может содержать апостроф-спан
+        const nickFound = html.includes(targetNick);
+        console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" ${nickFound ? 'НАЙДЕН' : 'нет'}`);
+        if (nickFound) {
             const escapedNick = targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Паттерн: href="/user/ID/">НИК + необязательный апостроф-спан + запятая
+            // Паттерн учитывает img перед ником и апостроф-спан после
+            // href="/user/ID/"><img ...>НИК[<span>'</span>]?,
             const userRegex = new RegExp(
-                `href="/user/(\\d+)/"[^>]*>` +
+                `href="/user/(\\d+)/"[^>]*><img[^>]*>` +
                 escapedNick + `(?:<span[^>]*>[^<]*<\/span>)?\\s*,`,
                 'g'
             );
             const userMatches = [...html.matchAll(userRegex)];
-            console.log(`[ban] Стр. ${pageNum}: ник найден, userId совпадений: ${userMatches.length}`);
+            console.log(`[ban] Совпадений userId: ${userMatches.length}`);
             if (userMatches.length > 0) {
                 targetId = userMatches[0][1];
                 console.log(`[ban] userId=${targetId}`);
                 break;
             }
-            // Запасной вариант: ищем userId через redact-ссылку (если есть права)
-            const redactRegex = new RegExp(
-                `href="/clan/${CLAN_ID}/redact/(\\d+)/"[\\s\\S]{0,300}?` +
-                escapedNick, 'g'
-            );
-            const redactMatches = [...html.matchAll(redactRegex)];
-            if (redactMatches.length > 0) {
-                targetId = redactMatches[0][1];
-                console.log(`[ban] userId=${targetId} (через redact)`);
-                break;
+            // Запасной: ищем просто /user/ID/ рядом с ником в радиусе 100 символов
+            const idx = html.indexOf('>' + targetNick);
+            if (idx > -1) {
+                const nearby = html.substring(Math.max(0, idx - 150), idx + 50);
+                const idMatch = nearby.match(/href="\/user\/(\d+)\/"/);
+                if (idMatch) {
+                    targetId = idMatch[1];
+                    console.log(`[ban] userId=${targetId} (запасной метод)`);
+                    break;
+                }
             }
-        } else {
-            console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" не найден`);
         }
         const hasNext = html.includes(`/clan/${CLAN_ID}//${pageNum + 1}`);
         if (!hasNext) break;
@@ -1016,7 +1029,7 @@ async function banPlayer(page, targetNick, data) {
     const page = await context.newPage();
 
     const data = await loadData();
-    const sentToday = new Set(Object.keys(data.announcements || {}));
+    const sentToday = new Set(); // сбрасываем при каждом запуске — announcements из Gist не загружаем чтобы не пропускать
 
     const RUN_MS = 340 * 60 * 1000;
     const endAt  = Date.now() + RUN_MS;
@@ -1050,7 +1063,7 @@ async function banPlayer(page, targetNick, data) {
 
         for (const item of SCHEDULE) {
             const key = `${dateKey}_${item.type}_${item.time}`;
-            if (hhmm >= item.time && hhmm < item.time + 2 && !sentToday.has(key)) {
+            if (hhmm >= item.time && hhmm < item.time + 5 && !sentToday.has(key)) {
                 sentToday.add(key);
                 data.announcements = data.announcements || {};
                 data.announcements[key] = true;
