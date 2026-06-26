@@ -706,7 +706,7 @@ async function handleQuiz(msgRaw, senderNick, userId, data, page) {
                     `✅ ${senderNick} прошёл тест форума! Результат: ${state.correct}/5 правильных.`);
             }
             return lang === 'ru'
-                ? `🎉 Поздравляем, ${senderNick}! Вы ответили верно на ${state.correct}/5 вопросов!\nВаш результат отправлен лидеру клана. Ждите повышения! 🏆`
+                ? `🎉 Поздравляем, ${senderNick}! Вы ответили верно на ${state.correct}/5 вопросов!\nВаш результат отправлен лидеру клана. Ждите повышения ранга в Боте! 🏆`
                 : `🎉 Congratulations, ${senderNick}! You got ${state.correct}/5 correct!\nYour result was sent to the clan leader. Await your promotion! 🏆`;
         } else {
             data.quizBlocked[userId] = now + QUIZ_TIMEOUT_MS;
