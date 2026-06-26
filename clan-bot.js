@@ -419,12 +419,13 @@ async function fetchLiveExp(page, senderNick) {
             : `${BASE_URL}/clan/${CLAN_ID}/clanexp/today/${pageNum}`;
         await navigate(page, url, 1500);
         const html = await pageHtml(page);
-        const expRegex = /href="\/user\/(\d+)\/">([^<]+?)(?:<span[^>]*>[^<]*<\/span>)*<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        // Ник находится между > и </a>, апостроф-спан идёт ПОСЛЕ </a>
+        const expRegex = /href="\/user\/\d+\/">([^<]+)<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
         let match;
         while ((match = expRegex.exec(html)) !== null) {
-            const nick = match[2].trim();
+            const nick = match[1].trim();
             if (nick === senderNick) {
-                const exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
+                const exp = parseInt(match[2].replace(/[\s']/g, ''), 10);
                 console.log(`[live-exp] Найден: ${nick} = ${exp.toLocaleString()}`);
                 return exp;
             }
@@ -448,12 +449,29 @@ async function fetchAllLiveExp(page) {
             : `${BASE_URL}/clan/${CLAN_ID}/clanexp/today/${pageNum}`;
         await navigate(page, url, 1500);
         const html = await pageHtml(page);
-        const expRegex = /href="\/user\/(\d+)\/">([^<]+?)(?:<span[^>]*>[^<]*<\/span>)*<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        // Логируем кусок HTML для диагностики на первой странице
+        if (pageNum === 1) {
+            const idx = html.indexOf('/user/');
+            if (idx > -1) console.log(`[live-exp-all] HTML образец: ${html.substring(idx - 10, idx + 200).replace(/\n/g,' ')}`);
+        }
+        // Пробуем оба варианта: с <b> и без (разные страницы могут иметь разную структуру)
+        // Вариант 1: <a href="/user/ID/">НИК</a>[span?] <b>ЧИСЛО</b>
+        const expRegex1 = /href="\/user\/\d+\/">([^<]+)<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        // Вариант 2: <a href="/user/ID/">НИК</a>[span?] ЧИСЛО (без <b>)
+        const expRegex2 = /href="\/user\/\d+\/">([^<]+)<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s+([\d']+)\s*<br/g;
         let match, found = 0;
-        while ((match = expRegex.exec(html)) !== null) {
-            const nick = match[2].trim();
-            const exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
-            if (nick !== BOT_NICK) { expMap[nick] = exp; found++; }
+        for (const regex of [expRegex1, expRegex2]) {
+            regex.lastIndex = 0;
+            while ((match = regex.exec(html)) !== null) {
+                const nick = match[1].trim();
+                const exp = parseInt(match[2].replace(/[\s']/g, ''), 10);
+                if (nick !== BOT_NICK && !expMap[nick] && !isNaN(exp)) {
+                    expMap[nick] = exp;
+                    found++;
+                    console.log(`[live-exp-all] ${nick}: ${exp}`);
+                }
+            }
+            if (found > 0) break; // нашли с первым вариантом — второй не нужен
         }
         console.log(`[live-exp-all] Страница ${pageNum}: найдено ${found}`);
         const hasNext = html.includes(`/clanexp/today/${pageNum + 1}`);
