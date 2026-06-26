@@ -38,7 +38,7 @@ function unescapeHtml(s) {
 
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
-    { time: 826,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
+    { time: 830,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
@@ -160,7 +160,22 @@ async function sendAnnouncement(page, text) {
     // Шаг 3: переходим на страницу управления
     console.log(`[announce] Шаг 3: переходим на страницу управления...`);
     await navigate(page, admUrl, 2000);
-    const admHtml = await pageHtml(page);
+    let admHtml = await pageHtml(page);
+
+    // Если висит баннер "Клановое объявление: ...Скрыть" от предыдущей отправки —
+    // форма ввода может быть скрыта/не рендериться, пока баннер не закрыт.
+    if (admHtml.includes('close_clan_msg=true')) {
+        console.log(`[announce] Виден баннер последнего объявления — закрываем...`);
+        const closeMatch = admHtml.match(/href="([^"]*close_clan_msg=true[^"]*)"/);
+        if (closeMatch) {
+            const closeHref = unescapeHtml(closeMatch[1]);
+            const closeUrl = closeHref.startsWith('http') ? closeHref : BASE_URL + (closeHref.startsWith('/') ? closeHref : admUrl.split('?')[0] + closeHref);
+            await navigate(page, closeUrl, 1500);
+            // После закрытия возвращаемся на страницу управления заново
+            await navigate(page, admUrl, 1500);
+            admHtml = await pageHtml(page);
+        }
+    }
 
     // Шаг 4: ищем поле ввода объявления
     console.log(`[announce] Шаг 4: ищем input[name="text"]...`);
