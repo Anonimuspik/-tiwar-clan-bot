@@ -1,6 +1,10 @@
 // clan-bot.js — Монитор Клана
 const { chromium } = require('playwright');
 const https = require('https');
+const {
+    getRandomQuestions, getQuizState, setQuizState,
+    formatQuestion, CORRECT_ANSWERS
+} = require('./forum_quiz');
 
 const BASE_URL      = 'https://tiwar.ru';
 const CLAN_ID       = '41140';
@@ -63,6 +67,11 @@ const RANK_REQUIREMENTS = {
     'Боец':        { expPerDay: 100000, battlesPerWeek: 23 },
     'Новобранец':  { expPerDay: 70000,  battlesPerWeek: 13 },
 };
+
+// ── Квиз состояния ───────────────────────────────────────────────────────────
+const QUIZ_TIMEOUT_MS  = 15 * 60 * 1000; // 15 мин блокировка после провала
+const QUIZ_ANSWER_MS   = 2  * 60 * 1000; // 2 мин на ответ
+const FORUM_DEADLINE   = '30 июня / June 30';
 
 const BOT_RANKS = { 0: 'Участник', 1: 'Ветеран', 2: 'Страж', 3: 'Доверенное лицо', 4: 'Верхушка' };
 
@@ -418,7 +427,20 @@ async function processDialog(page, data, userId) {
     }
 
     console.log(`[dialog] Обрабатываем команду: "${msgText}"`);
-    const reply = await processCommand(msgText, msgOrig, senderNick, userId, botRank, member, data, page);
+
+    // Сначала проверяем квиз-команды (/start /ru /en /форум /forum + ответы)
+    const quizKeywords = ['/start', '/ru', '/en', '/форум', '/forum', '/готов', '/готова', '/ready'];
+    const isQuizState = data.quizStates?.[userId]?.step === 'quiz';
+    const isQuizCmd = quizKeywords.some(k => msgText.startsWith(k)) || isQuizState;
+
+    let reply;
+    if (isQuizCmd) {
+        reply = await handleQuiz(msgText, senderNick, userId, data, page);
+        await saveData(data);
+    }
+    if (!reply) {
+        reply = await processCommand(msgText, msgOrig, senderNick, userId, botRank, member, data, page);
+    }
 
     // Возвращаемся на диалог после processCommand (он мог переключить страницу)
     console.log(`[dialog] Возвращаемся на диалог для отправки ответа...`);
@@ -567,6 +589,137 @@ async function fetchClanRanks(page) {
     console.log(`[clan-ranks] Всего рангов: ${Object.keys(rankMap).length}`);
     return rankMap;
 }
+
+// ── Обработка квиза ──────────────────────────────────────────────────────────
+
+async function handleQuiz(msgRaw, senderNick, userId, data, page) {
+    const msg = msgRaw.trim().toLowerCase();
+    if (!data.quizStates)  data.quizStates  = {};
+    if (!data.quizPassed)  data.quizPassed  = {};
+    if (!data.quizBlocked) data.quizBlocked = {};
+    if (!data.quizResults) data.quizResults = {};
+    const state = data.quizStates[userId] || null;
+
+    // /start
+    if (msg === '/start') {
+        return 'Я Терминал / I am Terminal\n\nВыберите язык / Choose language:\n/ru — Русский\n/en — English';
+    }
+
+    // Выбор языка
+    if (msg === '/ru' || msg === '/en') {
+        const lang = msg === '/ru' ? 'ru' : 'en';
+        data.quizStates[userId] = { lang, step: 'intro' };
+        return lang === 'ru'
+            ? `Добро пожаловать! 📋\n\nДо ${FORUM_DEADLINE} вам необходимо:\n1. Прочитать форум клана\n2. Пройти тест из 5 вопросов (нужно 3 правильных из 5)\n\nКогда будете готовы — напишите /форум`
+            : `Welcome! 📋\n\nBy ${FORUM_DEADLINE} you need to:\n1. Read the clan forum\n2. Pass a 5-question test (need 3 correct out of 5)\n\nWhen ready — type /forum`;
+    }
+
+    // /форум или /forum
+    if (msg === '/форум' || msg === '/forum') {
+        const lang = state?.lang || 'ru';
+        const now = Date.now();
+
+        if (data.quizPassed[userId]) {
+            return lang === 'ru'
+                ? '✅ Вы уже прошли тест! Ждите повышения от лидера.'
+                : '✅ You already passed! Await promotion from the leader.';
+        }
+
+        if (data.quizBlocked[userId]) {
+            const unblockAt = data.quizBlocked[userId];
+            if (now < unblockAt) {
+                const minLeft = Math.ceil((unblockAt - now) / 60000);
+                return lang === 'ru'
+                    ? `🔒 Доступ заблокирован. Попробуйте через ${minLeft} мин.`
+                    : `🔒 Access blocked. Try again in ${minLeft} min.`;
+            }
+            delete data.quizBlocked[userId];
+        }
+
+        if (!state?.lang) {
+            return 'Напишите /start для начала / Type /start to begin';
+        }
+
+        const questions = getRandomQuestions();
+        data.quizStates[userId] = {
+            lang,
+            step: 'quiz',
+            questions: questions.map(q => q.id),
+            current: 0,
+            correct: 0,
+            questionStartedAt: now,
+        };
+        const { QUIZ_QUESTIONS } = require('./forum_quiz');
+        const firstQ = QUIZ_QUESTIONS.find(q => q.id === questions[0].id) || questions[0];
+        return formatQuestion(firstQ, lang, 1, 5);
+    }
+
+    // /готов или /ready — просто синоним /форум для тех кто написал после intro
+    if (msg === '/готов' || msg === '/готова' || msg === '/ready') {
+        if (!state?.lang) return 'Напишите /start / Type /start';
+        data.quizStates[userId] = { ...state, step: 'intro' };
+        return await handleQuiz('/форум', senderNick, userId, data, page);
+    }
+
+    // Ответ на вопрос
+    if (state?.step === 'quiz') {
+        const { QUIZ_QUESTIONS } = require('./forum_quiz');
+        const lang = state.lang;
+        const now = Date.now();
+        const qId = state.questions[state.current];
+        const correctRu = CORRECT_ANSWERS[qId]?.ru || 'б';
+        const correctEn = CORRECT_ANSWERS[qId]?.en || 'b';
+        const correct = lang === 'ru' ? correctRu : correctEn;
+
+        const elapsed = now - (state.questionStartedAt || now);
+        const isTimeout = elapsed > QUIZ_ANSWER_MS;
+        const isCorrect = !isTimeout && (msg === correct);
+
+        if (isCorrect) state.correct++;
+        const next = state.current + 1;
+        state.current = next;
+        state.questionStartedAt = now;
+
+        let prefix = '';
+        if (isTimeout) prefix = lang === 'ru' ? '⏰ Время вышло, идём дальше.\n\n' : '⏰ Time is up, moving on.\n\n';
+        else prefix = isCorrect ? (lang === 'ru' ? '✅ Верно!\n\n' : '✅ Correct!\n\n') : (lang === 'ru' ? '❌ Неверно.\n\n' : '❌ Wrong.\n\n');
+
+        if (next < 5) {
+            const nextQ = QUIZ_QUESTIONS.find(q => q.id === state.questions[next]);
+            data.quizStates[userId] = state;
+            return prefix + formatQuestion(nextQ, lang, next + 1, 5);
+        }
+
+        // Финал
+        const passed = state.correct >= 3;
+        data.quizResults[userId] = { nick: senderNick, passed, correct: state.correct, date: new Date().toISOString() };
+        delete data.quizStates[userId];
+
+        if (passed) {
+            data.quizPassed[userId] = true;
+            // Уведомляем лидера
+            if (data.members[ADMIN_NICK]?.userId) {
+                await sendMail(page, data.members[ADMIN_NICK].userId,
+                    `✅ ${senderNick} прошёл тест форума! Результат: ${state.correct}/5 правильных.`);
+            }
+            return lang === 'ru'
+                ? `🎉 Поздравляем, ${senderNick}! Вы ответили верно на ${state.correct}/5 вопросов!\nВаш результат отправлен лидеру клана. Ждите повышения! 🏆`
+                : `🎉 Congratulations, ${senderNick}! You got ${state.correct}/5 correct!\nYour result was sent to the clan leader. Await your promotion! 🏆`;
+        } else {
+            data.quizBlocked[userId] = now + QUIZ_TIMEOUT_MS;
+            if (data.members[ADMIN_NICK]?.userId) {
+                await sendMail(page, data.members[ADMIN_NICK].userId,
+                    `❌ ${senderNick} не прошёл тест форума. Результат: ${state.correct}/5.`);
+            }
+            return lang === 'ru'
+                ? `❌ Вы набрали ${state.correct}/5. Нужно минимум 3 правильных.\nПопробуйте снова через 15 минут. Прочитайте форум внимательнее! 📖`
+                : `❌ You got ${state.correct}/5. Minimum 3 correct required.\nTry again in 15 minutes. Read the forum more carefully! 📖`;
+        }
+    }
+
+    return null;
+}
+
 
 async function processCommand(msg, msgOrig, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
@@ -903,7 +1056,7 @@ function buildMissingText(data) {
     return missing.length ? `Не пришли на последнее сражение:\n${missing.join(', ')}` : 'Все присутствовали!';
 }
 function buildHelpText(botRank) {
-    let t = `Ваш ранг: ${BOT_RANKS[botRank]}\nКоманды:\n/помощь\n/мой опыт за неделю\n/мои сражения за неделю\n/профиль\n/в чат от моего имени (текст)\n`;
+    let t = `Ваш ранг: ${BOT_RANKS[botRank]}\nКоманды:\n/start — запуск бота\n/форум (/forum) — тест форума\n/помощь\n/мой опыт за неделю\n/мои сражения за неделю\n/профиль\n/в чат от моего имени (текст)\n`;
     if (botRank >= 1) t += '/топ\n/статистика (ник)\n';
     if (botRank >= 2) t += '/кто не пришёл\n/напомни (ник)\n';
     if (botRank >= 3) t += '/сделай объявление (текст)\n/предупреждение (ник)\n';
