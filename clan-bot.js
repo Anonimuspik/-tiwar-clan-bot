@@ -564,7 +564,7 @@ async function collectMembers(page, data) {
         await navigate(page, url);
         const html = await pageHtml(page);
 
-        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/"[^>]*>.*?alt="">([\w\s\-А-Яа-яёЁ]+),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
+        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>[^<]*<img[^>]*>([^<,]+?)(?:<span[^>]*>[^<]*<\/span>)*,\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
         let match, found = 0;
         while ((match = memberRegex.exec(html)) !== null) {
             const userId = match[1], nick = match[2].trim(), rank = match[3].trim();
@@ -607,7 +607,7 @@ async function collectExp(page, data) {
         const html = await pageHtml(page);
 
         // Учитываем <span class="not_here">'</span> между </a> и <b> (офлайн игроки)
-        const expRegex = /href="\/user\/(\d+)\/">([\w\s\-А-Яа-яёЁ']+)<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        const expRegex = /href="\/user\/(\d+)\/">([^<]+?)(?:<span[^>]*>[^<]*<\/span>)*<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
         let match, found = 0;
         while ((match = expRegex.exec(html)) !== null) {
             const nick = match[2].trim(), exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
