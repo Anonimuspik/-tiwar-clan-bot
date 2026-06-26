@@ -10,28 +10,20 @@ const https = require('https');
 const BASE_URL     = 'https://tiwar.ru';
 const CLAN_ID      = '41140';
 const BOT_NICK     = 'Монитор Клана';
+const BOT_USER_ID  = '18170326';
 const ADMIN_NICK   = 'Kaneki';
 const ADMIN_USER_ID = '23411823';
 const CLAN_NAME    = 'Багровая Луна';
 
-const GIST_ID      = process.env.GIST_ID;       // ID вашего Gist
-const GIST_TOKEN   = process.env.GIST_TOKEN;    // GitHub Personal Access Token
-const COOKIES_JSON = process.env.COOKIES_JSON;  // Куки Монитора Клана
+const GIST_ID      = process.env.GIST_ID;
+const GIST_TOKEN   = process.env.GIST_TOKEN;
+const COOKIES_JSON = process.env.COOKIES_JSON_MONITOR || process.env.COOKIES_JSON;
 
 // МСК = UTC+3
 function getMsk() {
     const d = new Date();
     d.setMinutes(d.getMinutes() + d.getTimezoneOffset() + 180);
     return d;
-}
-
-function mskHHMM() {
-    const d = getMsk();
-    return d.getHours() * 100 + d.getMinutes();
-}
-
-function mskDayOfWeek() { // 0=вс,1=пн,...,5=пт,6=сб
-    return getMsk().getDay();
 }
 
 function todayKey() {
@@ -45,16 +37,14 @@ const SCHEDULE = [
     { time: 600,  type: 'morning' },
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
-    { time: 1430, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '15:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
+    { time: 1430, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '15:00' },
     { time: 1830, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '19:00' },
     { time: 2030, type: 'before_fight', fight: 'Древние алтари',    fightTime: '21:00' },
     { time: 2330, type: 'night' },
-    { time: 2335, type: 'collect_members' }, // собираем ники и звания
-    { time: 2350, type: 'collect_exp' },     // собираем опыт
+    { time: 2335, type: 'collect_members' },
+    { time: 2350, type: 'collect_exp' },
 ];
-
-// ── Требования по рангам (игровым) ───────────────────────────────────────────
 
 const RANK_REQUIREMENTS = {
     'Лидер клана': { expPerDay: 0,      battlesPerWeek: 30, label: 'Лидер' },
@@ -65,9 +55,7 @@ const RANK_REQUIREMENTS = {
     'Новобранец':  { expPerDay: 70000,  battlesPerWeek: 13, label: 'Новобранец' },
 };
 
-const TOTAL_BATTLES_PER_WEEK = 42; // 6 сражений в день × 7 дней
-
-// ── Ранги бота ────────────────────────────────────────────────────────────────
+const TOTAL_BATTLES_PER_WEEK = 42;
 
 const BOT_RANKS = {
     0: 'Участник',
@@ -81,6 +69,7 @@ const BOT_RANKS = {
 
 async function gistRequest(method, data = null) {
     return new Promise((resolve, reject) => {
+        const body = data ? JSON.stringify(data) : null;
         const options = {
             hostname: 'api.github.com',
             path: `/gists/${GIST_ID}`,
@@ -90,18 +79,19 @@ async function gistRequest(method, data = null) {
                 'User-Agent': 'tiwar-clan-bot',
                 'Accept': 'application/vnd.github.v3+json',
                 'Content-Type': 'application/json',
+                ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
             }
         };
         const req = https.request(options, res => {
-            let body = '';
-            res.on('data', d => body += d);
+            let resp = '';
+            res.on('data', d => resp += d);
             res.on('end', () => {
-                try { resolve(JSON.parse(body)); }
+                try { resolve(JSON.parse(resp)); }
                 catch(e) { resolve({}); }
             });
         });
         req.on('error', reject);
-        if (data) req.write(JSON.stringify(data));
+        if (body) req.write(body);
         req.end();
     });
 }
@@ -134,7 +124,7 @@ async function loadData() {
 async function saveData(data) {
     try {
         if (!data.botRanks) data.botRanks = {};
-        data.botRanks[ADMIN_NICK] = 4; // всегда фиксируем
+        data.botRanks[ADMIN_NICK] = 4;
         await gistRequest('PATCH', {
             files: { 'data.json': { content: JSON.stringify(data, null, 2) } }
         });
@@ -155,7 +145,7 @@ async function pageText(page) {
     return page.evaluate(() => document.body.innerHTML);
 }
 
-// ── Парсинг членов клана (ники + звания) ─────────────────────────────────────
+// ── Парсинг членов клана ──────────────────────────────────────────────────────
 
 async function collectMembers(page, data) {
     console.log('[members] Собираем список членов клана...');
@@ -169,7 +159,6 @@ async function collectMembers(page, data) {
         await navigate(page, url);
         const html = await pageText(page);
 
-        // Парсим игроков: ник, userId, звание
         const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/"[^>]*>.*?alt="">([\w\s\-А-Яа-яёЁ]+),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
         let match;
         let found = 0;
@@ -182,7 +171,6 @@ async function collectMembers(page, data) {
             found++;
         }
 
-        // Проверяем есть ли следующая страница
         const hasNext = html.includes(`/clan/${CLAN_ID}//${pageNum + 1}`);
         if (!hasNext || found === 0) break;
         pageNum++;
@@ -193,7 +181,6 @@ async function collectMembers(page, data) {
     const today = todayKey();
     for (const [nick, info] of Object.entries(members)) {
         if (!data.members[nick]) {
-            // Новый игрок — начинаем отслеживать со следующей недели
             data.members[nick] = {
                 userId: info.userId,
                 gameRank: info.gameRank,
@@ -203,14 +190,12 @@ async function collectMembers(page, data) {
             };
             console.log(`[members] Новый игрок: ${nick} (${info.gameRank})`);
         } else {
-            // Обновляем звание и userId
             data.members[nick].gameRank = info.gameRank;
             data.members[nick].userId   = info.userId;
             data.members[nick].isNew    = false;
         }
     }
 
-    // Убираем выбывших
     for (const nick of Object.keys(data.members)) {
         if (!members[nick]) {
             console.log(`[members] Игрок покинул клан: ${nick}`);
@@ -219,7 +204,7 @@ async function collectMembers(page, data) {
     }
 }
 
-// ── Парсинг кланового опыта за сегодня ───────────────────────────────────────
+// ── Парсинг опыта ─────────────────────────────────────────────────────────────
 
 async function collectExp(page, data) {
     console.log('[exp] Собираем опыт за сегодня...');
@@ -233,7 +218,6 @@ async function collectExp(page, data) {
         await navigate(page, url);
         const html = await pageText(page);
 
-        // <a href="/user/USERID/">NICK</a> <b>EXP</b>
         const expRegex = /href="\/user\/(\d+)\/">([\w\s\-А-Яа-яёЁ']+)<\/a>\s*<b>([\d\s']+)<\/b>/g;
         let match;
         let found = 0;
@@ -256,12 +240,11 @@ async function collectExp(page, data) {
     console.log('[exp] Опыт собран');
 }
 
-// ── Подсчёт статистики игрока ─────────────────────────────────────────────────
+// ── Статистика ────────────────────────────────────────────────────────────────
 
 function getWeekDates() {
     const dates = [];
     const now = getMsk();
-    // Неделя — последние 7 дней
     for (let i = 6; i >= 0; i--) {
         const d = new Date(now);
         d.setDate(d.getDate() - i);
@@ -274,9 +257,7 @@ function getPlayerWeeklyExp(nick, data) {
     const dates = getWeekDates();
     const expByDay = data.weeklyExp[nick] || {};
     let total = 0;
-    for (const d of dates) {
-        total += expByDay[d] || 0;
-    }
+    for (const d of dates) total += expByDay[d] || 0;
     return total;
 }
 
@@ -292,7 +273,7 @@ function getExpNormPercent(nick, data) {
     const member = data.members[nick];
     if (!member) return null;
     const req = getRequirements(member.gameRank);
-    if (!req.expPerDay) return 100; // лидер/зам — без лимита
+    if (!req.expPerDay) return 100;
     const weeklyNorm = req.expPerDay * 7;
     const exp = getPlayerWeeklyExp(nick, data);
     return Math.round((exp / weeklyNorm) * 100);
@@ -306,10 +287,10 @@ function getBattleNormPercent(nick, data) {
     return Math.round((battles / req.battlesPerWeek) * 100);
 }
 
-// ── Отправка объявления ───────────────────────────────────────────────────────
+// ── Объявления ────────────────────────────────────────────────────────────────
 
 async function sendAnnouncement(page, text) {
-    console.log(`[announce] Отправляем: ${text}`);
+    console.log(`[announce] Отправляем: ${text.substring(0, 60)}...`);
     await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/1/adm/?r=149897`);
     const input = await page.$('input[name="text"]');
     if (!input) { console.log('[announce] Поле ввода не найдено!'); return; }
@@ -318,8 +299,6 @@ async function sendAnnouncement(page, text) {
     await page.waitForTimeout(2000);
     console.log('[announce] Объявление отправлено');
 }
-
-// ── Текст объявлений ─────────────────────────────────────────────────────────
 
 function morningText() {
     return 'Я Терминал: Доброе утро! Хорошего дня! Не забывайте ходить на сражения и пополнять казну / Good morning! Have a great day! Don\'t forget battles & treasury!';
@@ -336,14 +315,14 @@ function beforeFightText(fightName, fightTime) {
         'Древние алтари':   'Древние алтари / Ancient Altars',
     };
     const fn = names[fightName] || fightName;
-    return `Я Терминал: Через 30 мин ${fn} (${fightTime}). Прошу всех явиться по возможности! / In 30 min ${fn}. Please attend if possible!`;
+    return `Я Терминал: Через 30 мин ${fn} (${fightTime}). Прошу всех явиться! / In 30 min ${fn}. Please attend!`;
 }
 
-// ── Отправка личного сообщения ────────────────────────────────────────────────
+// ── Личные сообщения ──────────────────────────────────────────────────────────
 
 async function sendMail(page, userId, text) {
     console.log(`[mail] Пишем userId=${userId}: ${text.substring(0,50)}...`);
-    await navigate(page, `${BASE_URL}/mail/${userId}/`);
+    await navigate(page, `${BASE_URL}/mail/${userId}/`, 2000);
     const textarea = await page.$('textarea[name="text"]');
     if (!textarea) { console.log('[mail] Поле ввода не найдено!'); return false; }
     await textarea.fill(text);
@@ -353,14 +332,13 @@ async function sendMail(page, userId, text) {
     return true;
 }
 
-// ── Чтение почты и обработка команд ──────────────────────────────────────────
+// ── Проверка почты ────────────────────────────────────────────────────────────
 
 async function checkMail(page, data) {
-    await navigate(page, BASE_URL, 3000);
+    await navigate(page, BASE_URL, 2000);
     const html = await pageText(page);
     console.log('[mail] на главной, ищем почту...');
 
-    // Проверяем есть ли новая почта
     if (!html.includes('Новая почта')) {
         console.log('[mail] новых писем нет');
         return;
@@ -377,7 +355,7 @@ async function checkMail(page, data) {
 
     while ((match = newMailRegex.exec(mailHtml)) !== null) {
         const uid = match[1];
-        // Проверяем что рядом есть +N (новое сообщение)
+        if (uid === BOT_USER_ID) continue;
         const nearby = mailHtml.substring(match.index, match.index + 400);
         if (nearby.includes('dgreen') && nearby.includes('+')) {
             if (!toProcess.find(x => x.userId === uid)) {
@@ -386,79 +364,116 @@ async function checkMail(page, data) {
         }
     }
 
-    if (toProcess.length === 0) return;
+    if (toProcess.length === 0) {
+        console.log('[mail] нет диалогов с новыми сообщениями');
+        return;
+    }
 
     console.log(`[mail] Новых диалогов: ${toProcess.length}`);
 
     for (const { userId } of toProcess) {
-        await navigate(page, `${BASE_URL}/mail/${userId}/0/`);
-        const convHtml = await pageText(page);
-
-        // Определяем ник отправителя — берём из заголовка диалога
-        const nickMatch = convHtml.match(/Диалог с ([^<"]+)</);
-        if (!nickMatch) {
-            console.log('[mail] не удалось определить ник отправителя');
-            continue;
+        try {
+            await processDialog(page, data, userId);
+        } catch(e) {
+            console.log(`[mail] Ошибка обработки диалога ${userId}:`, e.message);
         }
-        const senderNick = nickMatch[1].trim();
-        console.log('[mail] сообщение от:', senderNick);
+    }
+}
 
-        // Парсим все блоки сообщений
-        // Структура: <a href="/user/ID/">НИК</a> ... <span class="white">ТЕКСТ</span>
-        const BOT_USER_ID = '18170326';
-        const blocks = [...convHtml.matchAll(
-            /href="\/user\/(\d+)\/">([^<]+)<\/a>[\s\S]{0,300}?<span class="white">([\s\S]*?)<\/span>/g
-        )];
-        
-        // Берём ПЕРВОЕ сообщение НЕ от бота (в HTML новые идут первыми)
-        let msgText = '';
-        for (let i = 0; i < blocks.length; i++) {
-            const blockUserId = blocks[i][1];
-            const blockText = blocks[i][3].replace(/<[^>]+>/g, '').trim();
-            if (blockUserId !== BOT_USER_ID && blockText) {
-                msgText = blockText.toLowerCase();
-                console.log('[mail] последнее сообщение от', blocks[i][2].trim(), ':', blockText.substring(0, 80));
-                break;
-            }
+async function processDialog(page, data, userId) {
+    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+    const convHtml = await pageText(page);
+
+    // Определяем ник отправителя из заголовка "Диалог с НИК"
+    const nickMatch = convHtml.match(/Диалог с ([^<"(]+)/);
+    if (!nickMatch) {
+        console.log('[mail] не удалось определить ник отправителя');
+        return;
+    }
+    const senderNick = nickMatch[1].trim();
+    console.log('[mail] сообщение от:', senderNick);
+
+    // Парсим блоки сообщений
+    // Структура: <a href="/user/ID/">НИК</a> ... <span class="white">ТЕКСТ</span>
+    const blockRegex = /href="\/user\/(\d+)\/">([^<]+)<\/a>[\s\S]{0,500}?<span class="white">([\s\S]*?)<\/span>/g;
+    const blocks = [...convHtml.matchAll(blockRegex)];
+
+    // Берём ПЕРВОЕ сообщение НЕ от бота (новые идут первыми в HTML)
+    let msgText = '';
+    let msgRaw = '';
+    for (const block of blocks) {
+        const blockUserId = block[1];
+        const blockText = block[3].replace(/<[^>]+>/g, '').trim();
+        if (blockUserId !== BOT_USER_ID && blockText) {
+            msgRaw = blockText;
+            msgText = blockText.toLowerCase().trim();
+            console.log('[mail] последнее сообщение от', block[2].trim(), ':', blockText.substring(0, 80));
+            break;
         }
-        
-        if (!msgText) {
-            console.log('[mail] нет новых сообщений от пользователя');
-            continue;
+    }
+
+    if (!msgText) {
+        console.log('[mail] нет сообщений от пользователя (только наши)');
+        return;
+    }
+
+    // Не отвечаем дважды на одно сообщение
+    const lastRepliedKey = `lastReplied_${userId}`;
+    if (data[lastRepliedKey] === msgText) {
+        console.log('[mail] уже отвечали на это сообщение');
+        return;
+    }
+
+    // Проверяем клан — переходим на профиль и возвращаемся
+    const isOurClan = await checkUserClan(page, userId);
+
+    // FIX: возвращаемся на диалог ПЕРЕД отправкой ответа
+    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+
+    if (!isOurClan) {
+        console.log('[mail] игрок не из нашего клана');
+        await sendMailReplyOnPage(page, userId, 'Ты кто? Ты не из нашего клана. / Who are you? You are not from our clan.');
+        data[lastRepliedKey] = msgText;
+        return;
+    }
+
+    const botRank = data.botRanks[senderNick] ?? 0;
+    const member  = data.members[senderNick];
+
+    console.log(`[mail] обрабатываем команду: "${msgText}" от ${senderNick} (ранг ${botRank})`);
+    const reply = await processCommand(msgText, senderNick, userId, botRank, member, data, page);
+
+    if (reply) {
+        // FIX: снова заходим на диалог перед отправкой (processCommand мог переключить страницу)
+        await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+        await sendMailReplyOnPage(page, userId, reply);
+        data[lastRepliedKey] = msgText;
+        console.log('[mail] ответ отправлен');
+    } else {
+        console.log('[mail] команда не распознана:', msgText);
+    }
+}
+
+// Отправляет ответ находясь УЖЕ на странице диалога
+async function sendMailReplyOnPage(page, userId, text) {
+    let textarea = await page.$('textarea[name="text"]');
+    if (!textarea) {
+        console.log('[mail] textarea не найдена, перезагружаем диалог...');
+        await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+        textarea = await page.$('textarea[name="text"]');
+        if (!textarea) {
+            console.log('[mail] textarea всё равно не найдена!');
+            return;
         }
-
-        // Проверяем не отвечали ли мы уже на это сообщение
-        const lastRepliedKey = `lastReplied_${userId}`;
-        const lastReplied = data[lastRepliedKey] || '';
-        if (lastReplied === msgText) {
-            console.log('[mail] уже отвечали на это сообщение, пропускаем');
-            await navigate(page, `${BASE_URL}/mail/`);
-            continue;
-        }
-
-        // Проверяем — из нашего клана?
-        const isOurClan = await checkUserClan(page, userId);
-        await navigate(page, `${BASE_URL}/mail/${userId}/0/`);
-
-        if (!isOurClan) {
-            await sendMailReply(page, userId, 'Ты кто? / Who are you?');
-            data[lastRepliedKey] = msgText;
-            continue;
-        }
-
-        // Получаем бот-ранг
-        const botRank = data.botRanks[senderNick] ?? 0;
-        const member  = data.members[senderNick];
-
-        // Обрабатываем команду
-        const reply = await processCommand(msgText, senderNick, userId, botRank, member, data, page);
-        if (reply) {
-            await sendMailReply(page, userId, reply);
-            data[lastRepliedKey] = msgText; // запоминаем что ответили
-        }
-
-        // Возвращаемся в почту
-        await navigate(page, `${BASE_URL}/mail/`);
+    }
+    await textarea.fill(text);
+    const sendBtn = await page.$('input[name="send_message"]');
+    if (sendBtn) {
+        await sendBtn.click();
+        await page.waitForTimeout(2000);
+        console.log('[mail] сообщение отправлено:', text.substring(0, 50));
+    } else {
+        console.log('[mail] кнопка отправки не найдена!');
     }
 }
 
@@ -468,30 +483,14 @@ async function checkUserClan(page, userId) {
     return html.includes(CLAN_NAME);
 }
 
-async function sendMailReply(page, userId, text) {
-    const textarea = await page.$('textarea[name="text"]');
-    if (!textarea) {
-        await navigate(page, `${BASE_URL}/mail/${userId}/0/`);
-        const ta = await page.$('textarea[name="text"]');
-        if (!ta) return;
-        await ta.fill(text);
-    } else {
-        await textarea.fill(text);
-    }
-    const sendBtn = await page.$('input[name="send_message"]');
-    if (sendBtn) await sendBtn.click();
-    await page.waitForTimeout(2000);
-}
-
 // ── Обработка команд ──────────────────────────────────────────────────────────
 
 async function processCommand(msg, senderNick, userId, botRank, member, data, page) {
-    // /помощь
-    if (msg.includes('/помощь')) {
+
+    if (msg.includes('/помощь') || msg.includes('/команды')) {
         return buildHelpText(botRank);
     }
 
-    // /мой опыт за неделю
     if (msg.includes('/мой опыт')) {
         if (!member) return 'Вы не найдены в базе данных клана.';
         const exp = getPlayerWeeklyExp(senderNick, data);
@@ -499,41 +498,39 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
         const req = getRequirements(member.gameRank);
         const weeklyNorm = req.expPerDay * 7;
         const left = Math.max(0, weeklyNorm - exp);
-        return `📊 Ваш опыт за неделю: ${exp.toLocaleString()}\n` +
+        if (!req.expPerDay) return `Опыт за неделю: ${exp.toLocaleString()}\nДля вашего ранга (${member.gameRank}) ограничений по опыту нет.`;
+        return `Ваш опыт за неделю: ${exp.toLocaleString()}\n` +
                `Норма (${member.gameRank}): ${weeklyNorm.toLocaleString()}\n` +
                `Выполнено: ${pct}%\n` +
-               (left > 0 ? `Осталось набрать: ${left.toLocaleString()}` : '✅ Норма выполнена!');
+               (left > 0 ? `Осталось набрать: ${left.toLocaleString()}` : 'Норма выполнена!');
     }
 
-    // /мои сражения за неделю
     if (msg.includes('/мои сражения')) {
         if (!member) return 'Вы не найдены в базе данных клана.';
         const battles = getPlayerWeeklyBattles(senderNick, data);
         const pct = getBattleNormPercent(senderNick, data);
         const req = getRequirements(member.gameRank);
         const left = Math.max(0, req.battlesPerWeek - battles);
-        return `⚔️ Ваши сражения за неделю: ${battles}/${req.battlesPerWeek}\n` +
+        return `Ваши сражения за неделю: ${battles}/${req.battlesPerWeek}\n` +
                `Выполнено: ${pct}%\n` +
-               (left > 0 ? `Осталось боёв: ${left}` : '✅ Норма выполнена!');
+               (left > 0 ? `Осталось боёв: ${left}` : 'Норма выполнена!');
     }
 
-    // /профиль
-    if (msg.includes('/профиль')) {
+    if (msg.includes('/профиль') || msg.includes('/мой профиль')) {
         if (!member) return 'Вы не найдены в базе данных клана.';
         const topList = getTopList(data);
         const pos = topList.findIndex(n => n === senderNick) + 1;
-        return `👤 ${senderNick}\n` +
+        return `${senderNick}\n` +
                `Игровой ранг: ${member.gameRank}\n` +
                `Ранг в боте: ${BOT_RANKS[botRank]}\n` +
                `Позиция в топе клана: #${pos > 0 ? pos : '?'}`;
     }
 
-    // /в чат от моего имени (текст)
     if (msg.includes('/в чат от моего имени')) {
         const text = msg.replace('/в чат от моего имени', '').trim();
-        if (!text) return 'Напишите текст после команды /в чат от моего имени';
+        if (!text) return 'Напишите текст: /в чат от моего имени текст';
         await sendClanChat(page, `Сообщение от ${senderNick}: ${text}`);
-        return '✅ Сообщение отправлено в чат клана.';
+        return 'Сообщение отправлено в чат клана.';
     }
 
     // ── Ранг 1+ ──────────────────────────────────────────────────────────────
@@ -551,7 +548,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const expPct = getExpNormPercent(targetNick, data);
             const battlePct = getBattleNormPercent(targetNick, data);
-            return `📊 ${targetNick} (${target.gameRank})\n` +
+            return `${targetNick} (${target.gameRank})\n` +
                    `Опыт за неделю: ${exp.toLocaleString()} (${expPct}%)\n` +
                    `Сражения: ${battles} (${battlePct}%)`;
         }
@@ -560,7 +557,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     // ── Ранг 2+ ──────────────────────────────────────────────────────────────
 
     if (botRank >= 2) {
-        if (msg.includes('/кто не пришёл')) {
+        if (msg.includes('/кто не пришёл') || msg.includes('/кто не пришел')) {
             return buildMissingText(data);
         }
         if (msg.includes('/напомни')) {
@@ -573,9 +570,9 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const reminderText = `Привет! Напоминание о норме клана:\n` +
                 `Опыт за неделю: ${exp.toLocaleString()} / ${(req.expPerDay*7).toLocaleString()}\n` +
                 `Сражения: ${battles} / ${req.battlesPerWeek}\n` +
-                `Постарайся выполнить норму до конца недели! 💪`;
+                `Постарайся выполнить норму до конца недели!`;
             await sendMail(page, target.userId, reminderText);
-            return `✅ Напоминание отправлено игроку ${targetNick}.`;
+            return `Напоминание отправлено игроку ${targetNick}.`;
         }
     }
 
@@ -586,23 +583,23 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const text = msg.replace('/сделай объявление', '').trim();
             if (!text) return 'Напишите текст: /сделай объявление текст';
             await sendAnnouncement(page, text);
-            return '✅ Объявление отправлено.';
+            return 'Объявление отправлено.';
         }
         if (msg.includes('/предупреждение')) {
             const targetNick = msg.replace('/предупреждение', '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
-            const warnText = `⚠️ Официальное предупреждение!\n` +
+            const warnText = `Официальное предупреждение!\n` +
                 `Вы не выполняете нормы активности клана.\n` +
                 `Опыт: ${getPlayerWeeklyExp(targetNick, data).toLocaleString()}\n` +
                 `Сражения: ${getPlayerWeeklyBattles(targetNick, data)}\n` +
-                `Пожалуйста, повысьте активность, иначе вас могут исключить.`;
+                `Повысьте активность, иначе вас могут исключить.`;
             await sendMail(page, target.userId, warnText);
-            return `✅ Предупреждение отправлено ${targetNick}.`;
+            return `Предупреждение отправлено ${targetNick}.`;
         }
     }
 
-    // ── Ранг 4 (Верхушка) ────────────────────────────────────────────────────
+    // ── Ранг 4 ───────────────────────────────────────────────────────────────
 
     if (botRank >= 4) {
         if (msg.includes('/повысить')) {
@@ -613,8 +610,8 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             data.botRanks[targetNick] = cur + 1;
             await saveData(data);
             await sendMail(page, data.members[targetNick].userId,
-                `🎉 Ваш ранг в боте повышен до "${BOT_RANKS[cur+1]}"! Вы заслужили. Напишите /профиль чтобы посмотреть текущий ранг.`);
-            return `✅ ${targetNick} повышен до ранга "${BOT_RANKS[cur+1]}".`;
+                `Ваш ранг в боте повышен до "${BOT_RANKS[cur+1]}"! Вы заслужили. Напишите /профиль чтобы посмотреть текущий ранг.`);
+            return `${targetNick} повышен до ранга "${BOT_RANKS[cur+1]}".`;
         }
 
         if (msg.includes('/понизить')) {
@@ -625,21 +622,21 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             if (cur <= 0) return `${targetNick} уже на минимальном ранге.`;
             data.botRanks[targetNick] = cur - 1;
             await saveData(data);
-            return `✅ ${targetNick} понижен до ранга "${BOT_RANKS[cur-1]}".`;
+            return `${targetNick} понижен до ранга "${BOT_RANKS[cur-1]}".`;
         }
 
-        if (msg.includes('/отчёт')) {
+        if (msg.includes('/отчёт') || msg.includes('/отчет')) {
             return buildWeeklyReport(data);
         }
 
         if (msg.includes('/бан')) {
             const targetNick = msg.replace('/бан', '').trim();
-            const result = await banPlayer(page, targetNick, data);
-            return result;
+            return await banPlayer(page, targetNick, data);
         }
     }
 
-    return null; // неизвестная команда — не отвечаем
+    // Неизвестная команда
+    return `Команда не найдена. Напишите /помощь для списка команд.`;
 }
 
 // ── Чат клана ─────────────────────────────────────────────────────────────────
@@ -653,7 +650,7 @@ async function sendClanChat(page, text) {
     await page.waitForTimeout(1500);
 }
 
-// ── Топ по опыту ─────────────────────────────────────────────────────────────
+// ── Топ ──────────────────────────────────────────────────────────────────────
 
 function getTopList(data) {
     return Object.keys(data.members)
@@ -664,18 +661,17 @@ function getTopList(data) {
 function buildTopText(data) {
     const top = getTopList(data).slice(0, 10);
     if (top.length === 0) return 'Данных пока нет.';
-    let text = '🏆 Топ клана по опыту за неделю:\n';
+    let text = 'Топ клана по опыту за неделю:\n';
     top.forEach((nick, i) => {
         const exp = getPlayerWeeklyExp(nick, data);
-        text += `${i+1}. ${nick} — ${exp.toLocaleString()}\n`;
+        text += `${i+1}. ${nick} - ${exp.toLocaleString()}\n`;
     });
     return text;
 }
 
-// ── Кто не пришёл на последнее сражение ──────────────────────────────────────
+// ── Кто не пришёл ─────────────────────────────────────────────────────────────
 
 function buildMissingText(data) {
-    // Используем данные о сражениях (когда будет реализовано)
     const today = todayKey();
     const missing = [];
     for (const [nick, member] of Object.entries(data.members)) {
@@ -685,22 +681,22 @@ function buildMissingText(data) {
             missing.push(nick);
         }
     }
-    if (missing.length === 0) return '✅ Все члены клана присутствовали на последнем сражении!';
-    return `❌ Не пришли на последнее сражение:\n${missing.join(', ')}`;
+    if (missing.length === 0) return 'Все члены клана присутствовали на последнем сражении!';
+    return `Не пришли на последнее сражение:\n${missing.join(', ')}`;
 }
 
-// ── Помощь по рангу ───────────────────────────────────────────────────────────
+// ── Помощь ────────────────────────────────────────────────────────────────────
 
 function buildHelpText(botRank) {
-    let text = `📋 Ваш ранг: ${BOT_RANKS[botRank]}\nДоступные команды:\n`;
-    text += '/помощь — список команд\n';
+    let text = `Ваш ранг: ${BOT_RANKS[botRank]}\nДоступные команды:\n`;
+    text += '/помощь - список команд\n';
     text += '/мой опыт за неделю\n';
     text += '/мои сражения за неделю\n';
     text += '/профиль\n';
     text += '/в чат от моего имени (текст)\n';
     if (botRank >= 1) {
-        text += '/топ — топ клана по опыту\n';
-        text += '/статистика (ник) — статистика игрока\n';
+        text += '/топ - топ клана по опыту\n';
+        text += '/статистика (ник)\n';
     }
     if (botRank >= 2) {
         text += '/кто не пришёл\n';
@@ -714,12 +710,12 @@ function buildHelpText(botRank) {
         text += '/повысить (ник)\n';
         text += '/понизить (ник)\n';
         text += '/бан (ник)\n';
-        text += '/отчёт — недельный отчёт\n';
+        text += '/отчёт - недельный отчёт\n';
     }
     return text;
 }
 
-// ── Недельный отчёт (пятница) ────────────────────────────────────────────────
+// ── Недельный отчёт ───────────────────────────────────────────────────────────
 
 function buildWeeklyReport(data) {
     const fulfilled = [];
@@ -738,31 +734,30 @@ function buildWeeklyReport(data) {
             const expOver = req.expPerDay ? exp - weeklyNorm : null;
             const batOver = battles - req.battlesPerWeek;
             let note = [];
-            if (expOver !== null && expOver > 0) note.push(`+${expOver.toLocaleString()} опыта`);
+            if (expOver !== null && expOver > 0) note.push(`+${expOver.toLocaleString()} оп`);
             if (batOver > 0) note.push(`+${batOver} боёв`);
             fulfilled.push(`${nick} (${note.join(', ') || 'норма'})`);
         } else {
             let lacks = [];
-            if (req.expPerDay && exp < weeklyNorm) lacks.push(`не хватает ${(weeklyNorm-exp).toLocaleString()} опыта`);
-            if (battles < req.battlesPerWeek) lacks.push(`не хватает ${req.battlesPerWeek-battles} боёв`);
+            if (req.expPerDay && exp < weeklyNorm) lacks.push(`-${(weeklyNorm-exp).toLocaleString()} оп`);
+            if (battles < req.battlesPerWeek) lacks.push(`-${req.battlesPerWeek-battles} боёв`);
             notFulfilled.push(`${nick}: ${lacks.join(', ')}`);
         }
     }
 
-    let report = '📊 НЕДЕЛЬНЫЙ ОТЧЁТ КЛАНА\n\n';
-    report += `✅ Выполнили норму (${fulfilled.length}):\n`;
+    let report = 'НЕДЕЛЬНЫЙ ОТЧЁТ\n\n';
+    report += `Выполнили (${fulfilled.length}):\n`;
     report += fulfilled.length ? fulfilled.join('\n') : 'Никто';
-    report += `\n\n❌ Не выполнили норму (${notFulfilled.length}):\n`;
+    report += `\n\nНе выполнили (${notFulfilled.length}):\n`;
     report += notFulfilled.length ? notFulfilled.join('\n') : 'Все молодцы!';
     return report;
 }
 
-// ── Пятничный отчёт в объявления ─────────────────────────────────────────────
+// ── Пятничный отчёт ───────────────────────────────────────────────────────────
 
 async function sendFridayReport(page, data) {
     console.log('[report] Отправляем пятничный отчёт...');
     const report = buildWeeklyReport(data);
-    // Разбиваем на части по 132 символа
     const parts = [];
     const lines = report.split('\n');
     let chunk = '';
@@ -781,7 +776,6 @@ async function sendFridayReport(page, data) {
         await page.waitForTimeout(3000);
     }
 
-    // Сбрасываем счётчики для новой недели
     data.weeklyExp = {};
     data.weeklyBattles = {};
     for (const nick of Object.keys(data.members)) {
@@ -790,14 +784,13 @@ async function sendFridayReport(page, data) {
     await saveData(data);
 }
 
-// ── Исключение из клана ───────────────────────────────────────────────────────
+// ── Бан ──────────────────────────────────────────────────────────────────────
 
 async function banPlayer(page, targetNick, data) {
     console.log(`[ban] Исключаем: ${targetNick}`);
     let pageNum = 1;
-    let found = false;
 
-    while (!found) {
+    while (true) {
         const url = pageNum === 1
             ? `${BASE_URL}/clan/${CLAN_ID}/`
             : `${BASE_URL}/clan/${CLAN_ID}//${pageNum}`;
@@ -805,16 +798,14 @@ async function banPlayer(page, targetNick, data) {
         const html = await pageText(page);
 
         if (html.includes(targetNick)) {
-            // Ищем userId по нику
-            const re = new RegExp(`href="/clan/${CLAN_ID}/redact/(\\d+)/"[^>]*>[^>]*>([^,]+),`);
-            const match = re.exec(html);
-            if (match) {
-                const targetId = match[1];
-                // Переходим на страницу исключения
+            const re = new RegExp(`href="/clan/${CLAN_ID}/redact/(\\d+)/"`);
+            const allMatches = [...html.matchAll(new RegExp(`href="/clan/${CLAN_ID}/redact/(\\d+)/"[\\s\\S]{0,200}?>${targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')},`, 'g'))];
+            if (allMatches.length > 0) {
+                const targetId = allMatches[0][1];
                 await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/redact/${targetId}/`);
-                const deleteBtn = await page.$(`a[href*="/redact/${targetId}/delete/"]`);
-                if (deleteBtn) {
-                    const href = await deleteBtn.getAttribute('href');
+                const deleteLink = await page.$(`a[href*="/redact/${targetId}/delete/"]`);
+                if (deleteLink) {
+                    const href = await deleteLink.getAttribute('href');
                     await navigate(page, BASE_URL + href);
                     const confirmLink = await page.$(`a[href*="yes=1"]`);
                     if (confirmLink) {
@@ -822,8 +813,7 @@ async function banPlayer(page, targetNick, data) {
                         await page.waitForTimeout(2000);
                         delete data.members[targetNick];
                         await saveData(data);
-                        found = true;
-                        return `✅ Игрок ${targetNick} исключён из клана.`;
+                        return `Игрок ${targetNick} исключён из клана.`;
                     }
                 }
             }
@@ -834,7 +824,7 @@ async function banPlayer(page, targetNick, data) {
         pageNum++;
     }
 
-    return `❌ Игрок "${targetNick}" не найден в клане.`;
+    return `Игрок "${targetNick}" не найден в клане.`;
 }
 
 // ── Основной цикл ─────────────────────────────────────────────────────────────
@@ -863,22 +853,21 @@ async function banPlayer(page, targetNick, data) {
     });
     await context.addCookies(cookies);
     const page = await context.newPage();
-    page.on('console', msg => console.log('[page]', msg.text()));
 
     const data = await loadData();
     const sentToday = new Set(Object.keys(data.announcements || {}));
 
     const RUN_MS = 340 * 60 * 1000;
     const endAt  = Date.now() + RUN_MS;
-    const TICK   = 5 * 1000; // проверяем каждые 5 секунд
+    const TICK   = 5 * 1000;
 
     while (Date.now() < endAt) {
         const now = getMsk();
         const hhmm = now.getHours() * 100 + now.getMinutes();
-        const dow  = now.getDay(); // 5 = пятница
+        const dow  = now.getDay();
         const dateKey = todayKey();
 
-        // ── Расписание объявлений ─────────────────────────────────────────────
+        // ── Расписание ────────────────────────────────────────────────────────
         for (const item of SCHEDULE) {
             const key = `${dateKey}_${item.type}_${item.time}`;
             if (hhmm >= item.time && hhmm < item.time + 2 && !sentToday.has(key)) {
@@ -890,7 +879,6 @@ async function banPlayer(page, targetNick, data) {
                     await sendAnnouncement(page, morningText());
                 } else if (item.type === 'night') {
                     await sendAnnouncement(page, nightText());
-                    // Пятничный отчёт
                     if (dow === 5) await sendFridayReport(page, data);
                 } else if (item.type === 'before_fight') {
                     await sendAnnouncement(page, beforeFightText(item.fight, item.fightTime));
@@ -902,26 +890,19 @@ async function banPlayer(page, targetNick, data) {
                     await saveData(data);
                 }
 
-                // Чистим старые ключи (старше 2 дней)
                 for (const k of Object.keys(data.announcements)) {
                     if (!k.startsWith(dateKey)) delete data.announcements[k];
                 }
             }
         }
 
-        // ── Проверка почты каждые 5 секунд ──────────────────────────────────
-        const mailNow = Date.now();
-        const lastMailCheck = parseInt(data._lastMailCheck || '0', 10);
-        if (mailNow - lastMailCheck >= 5000) {
-            data._lastMailCheck = mailNow;
-            console.log('[mail-tick] проверяем почту...');
-            try {
-                await checkMail(page, data);
-            } catch(e) {
-                console.log('[mail-tick] ошибка:', e.message);
-            }
-            await saveData(data);
+        // ── Почта ─────────────────────────────────────────────────────────────
+        try {
+            await checkMail(page, data);
+        } catch(e) {
+            console.log('[mail-tick] ошибка:', e.message);
         }
+        await saveData(data);
 
         await page.waitForTimeout(TICK);
     }
