@@ -403,25 +403,38 @@ async function checkMail(page, data) {
         const senderNick = nickMatch[1].trim();
         console.log('[mail] сообщение от:', senderNick);
 
-        // Последнее входящее сообщение — ищем последнее сообщение от собеседника
-        // Формат: <a href="/user/ID/">НИК</a> ... текст сообщения
-        const msgBlocks = [...convHtml.matchAll(/href="\/user\/\d+\/"[^>]*>([^<]+)<\/a>[^|]*\|\s*[\d:]+<\/span>\s*<\/div>\s*<div[^>]*>([\s\S]*?)<\/div>/g)];
+        // Парсим все блоки сообщений
+        // Структура: <a href="/user/ID/">НИК</a> ... <span class="white">ТЕКСТ</span>
+        const BOT_USER_ID = '18170326';
+        const blocks = [...convHtml.matchAll(
+            /href="\/user\/(\d+)\/">([^<]+)<\/a>[\s\S]{0,300}?<span class="white">([\s\S]*?)<\/span>/g
+        )];
+        
+        // Берём последнее сообщение НЕ от бота
         let msgText = '';
-        if (msgBlocks.length > 0) {
-            // Берём последнее сообщение
-            const lastBlock = msgBlocks[msgBlocks.length - 1];
-            msgText = lastBlock[2].replace(/<[^>]+>/g, '').trim().toLowerCase();
-        } else {
-            // Запасной вариант — ищем просто текст после ника
-            const fallback = convHtml.match(new RegExp(senderNick + '[\s\S]{0,200}?<br[^>]*>([^<]{3,200})'));
-            if (fallback) msgText = fallback[1].trim().toLowerCase();
+        for (let i = blocks.length - 1; i >= 0; i--) {
+            const blockUserId = blocks[i][1];
+            const blockText = blocks[i][3].replace(/<[^>]+>/g, '').trim();
+            if (blockUserId !== BOT_USER_ID && blockText) {
+                msgText = blockText.toLowerCase();
+                console.log('[mail] последнее сообщение от', blocks[i][2].trim(), ':', blockText.substring(0, 80));
+                break;
+            }
         }
         
         if (!msgText) {
-            console.log('[mail] не удалось извлечь текст сообщения');
+            console.log('[mail] нет новых сообщений от пользователя');
             continue;
         }
-        console.log('[mail] текст сообщения:', msgText.substring(0, 80));
+
+        // Проверяем не отвечали ли мы уже на это сообщение
+        const lastRepliedKey = `lastReplied_${userId}`;
+        const lastReplied = data[lastRepliedKey] || '';
+        if (lastReplied === msgText) {
+            console.log('[mail] уже отвечали на это сообщение, пропускаем');
+            await navigate(page, `${BASE_URL}/mail/`);
+            continue;
+        }
 
         // Проверяем — из нашего клана?
         const isOurClan = await checkUserClan(page, userId);
@@ -429,6 +442,7 @@ async function checkMail(page, data) {
 
         if (!isOurClan) {
             await sendMailReply(page, userId, 'Ты кто? / Who are you?');
+            data[lastRepliedKey] = msgText;
             continue;
         }
 
@@ -440,6 +454,7 @@ async function checkMail(page, data) {
         const reply = await processCommand(msgText, senderNick, userId, botRank, member, data, page);
         if (reply) {
             await sendMailReply(page, userId, reply);
+            data[lastRepliedKey] = msgText; // запоминаем что ответили
         }
 
         // Возвращаемся в почту
