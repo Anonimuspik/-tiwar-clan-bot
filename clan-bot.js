@@ -179,10 +179,16 @@ async function sendAnnouncement(page, text) {
 }
 
 function morningText() {
-    return 'Я Терминал: Доброе утро! Хорошего дня! Не забывайте ходить на сражения и пополнять казну / Good morning! Have a great day! Don\'t forget battles & treasury!';
+    const t = getMsk();
+    const hh = String(t.getHours()).padStart(2,'0');
+    const mm = String(t.getMinutes()).padStart(2,'0');
+    return `Я Терминал [${hh}:${mm} МСК]: Доброе утро! Хорошего дня! Не забывайте ходить на сражения и пополнять казну / Good morning! Have a great day! Don't forget battles & treasury!`;
 }
 function nightText() {
-    return 'Я Терминал: Всем доброй ночи, надеюсь вы выполнили норму! / Good night everyone, hope you\'ve completed your quota!';
+    const t = getMsk();
+    const hh = String(t.getHours()).padStart(2,'0');
+    const mm = String(t.getMinutes()).padStart(2,'0');
+    return `Я Терминал [${hh}:${mm} МСК]: Всем доброй ночи, надеюсь вы выполнили норму! / Good night everyone, hope you've completed your quota!`;
 }
 function beforeFightText(fightName, fightTime) {
     const names = {
@@ -190,7 +196,10 @@ function beforeFightText(fightName, fightTime) {
         'Клановый турнир':  'Клановый турнир / Clan Tournament',
         'Древние алтари':   'Древние алтари / Ancient Altars',
     };
-    return `Я Терминал: Через 30 мин ${names[fightName]||fightName} (${fightTime}). Прошу всех явиться! / In 30 min, please attend!`;
+    const t = getMsk();
+    const hh = String(t.getHours()).padStart(2,'0');
+    const mm = String(t.getMinutes()).padStart(2,'0');
+    return `Я Терминал [${hh}:${mm} МСК]: Через 30 мин ${names[fightName]||fightName} (${fightTime}). Прошу всех явиться! / In 30 min, please attend!`;
 }
 
 // ── Личные сообщения ──────────────────────────────────────────────────────────
@@ -904,28 +913,43 @@ async function banPlayer(page, targetNick, data) {
     console.log(`[ban] Переходим на ADM: ${admUrl}`);
     await navigate(page, admUrl, 2000);
 
-    // Шаг 2: ищем игрока по страницам клана (через ADM страницы с redact-ссылками)
-    // ADM даёт нам доступ к /clan/41140/redact/ID/ — но список игроков на обычных страницах
-    // Нужно найти userId игрока — берём его со страниц /clan/41140//N
+    // Шаг 2: ищем userId игрока — берём со страниц /clan/41140//N
+    // HTML: <a href="/user/ID/">НИК[span?], <span class="white">РАНГ</span>
     let targetId = null;
     let pageNum = 1;
     while (!targetId) {
         const url = pageNum === 1 ? `${BASE_URL}/clan/${CLAN_ID}/` : `${BASE_URL}/clan/${CLAN_ID}//${pageNum}`;
         await navigate(page, url, 1500);
         html = await pageHtml(page);
-        const escapedNick = targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Ищем href="/user/ID/" рядом с ником (на обычной странице есть у всех)
-        const userRegex = new RegExp(
-            `href="/user/(\\d+)/"[^>]*>[^>]*>` +
-            escapedNick + `(?:<span[^>]*>[^<]*<\/span>)?,`,
-            'g'
-        );
-        const userMatches = [...html.matchAll(userRegex)];
-        console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" ${html.includes(targetNick) ? 'есть' : 'нет'}, совпадений: ${userMatches.length}`);
-        if (userMatches.length > 0) {
-            targetId = userMatches[0][1];
-            console.log(`[ban] Найден userId=${targetId}`);
-            break;
+        if (html.includes(targetNick)) {
+            // Ищем userId через href="/user/ID/">НИК — ник может содержать апостроф-спан
+            const escapedNick = targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Паттерн: href="/user/ID/">НИК + необязательный апостроф-спан + запятая
+            const userRegex = new RegExp(
+                `href="/user/(\\d+)/"[^>]*>` +
+                escapedNick + `(?:<span[^>]*>[^<]*<\/span>)?\\s*,`,
+                'g'
+            );
+            const userMatches = [...html.matchAll(userRegex)];
+            console.log(`[ban] Стр. ${pageNum}: ник найден, userId совпадений: ${userMatches.length}`);
+            if (userMatches.length > 0) {
+                targetId = userMatches[0][1];
+                console.log(`[ban] userId=${targetId}`);
+                break;
+            }
+            // Запасной вариант: ищем userId через redact-ссылку (если есть права)
+            const redactRegex = new RegExp(
+                `href="/clan/${CLAN_ID}/redact/(\\d+)/"[\\s\\S]{0,300}?` +
+                escapedNick, 'g'
+            );
+            const redactMatches = [...html.matchAll(redactRegex)];
+            if (redactMatches.length > 0) {
+                targetId = redactMatches[0][1];
+                console.log(`[ban] userId=${targetId} (через redact)`);
+                break;
+            }
+        } else {
+            console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" не найден`);
         }
         const hasNext = html.includes(`/clan/${CLAN_ID}//${pageNum + 1}`);
         if (!hasNext) break;
