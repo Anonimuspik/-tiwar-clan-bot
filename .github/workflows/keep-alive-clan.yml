@@ -1,43 +1,35 @@
 name: Tiwar Clan Monitor Bot
-
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '1 */6 * * *'
   workflow_dispatch: {}
-
 jobs:
   run-clan-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 350
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Install dependencies
         run: npm install
-
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-
       - name: Run clan bot
         env:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON_MONITOR }}
           GIST_ID:      ${{ secrets.GIST_ID }}
           GIST_TOKEN:   ${{ secrets.GIST_TOKEN }}
-          RUN_MINUTES:  '340'
         run: node clan-bot.js
-
       - name: Trigger next run
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          sleep 60
           gh workflow run keep-alive-clan.yml \
             --repo "${{ github.repository }}" \
             --ref "${{ github.ref_name }}"
