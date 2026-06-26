@@ -463,7 +463,8 @@ async function fetchAllLiveExp(page) {
         for (const regex of [expRegex1, expRegex2]) {
             regex.lastIndex = 0;
             while ((match = regex.exec(html)) !== null) {
-                const nick = match[1].trim();
+                // Чистим ник: убираем кавычки, апострофы и пробелы по краям
+                const nick = match[1].replace(/['"]/g, '').trim();
                 const exp = parseInt(match[2].replace(/[\s']/g, ''), 10);
                 if (nick !== BOT_NICK && !expMap[nick] && !isNaN(exp)) {
                     expMap[nick] = exp;
@@ -571,10 +572,26 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             // Возвращаемся на диалог
             await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
             if (!ranked.length) return 'Данных пока нет.';
-            return 'Топ клана (опыт за неделю):\n' + ranked.map((r, i) => {
+            // Разбиваем на сообщения по ~120 символов (лимит игры ~132)
+            const lines = ranked.map((r, i) => {
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
                 return `${i+1}. ${r.nick} - ${r.totalExp.toLocaleString()}${pctStr}`;
-            }).join('\n');
+            });
+            const header = 'Топ клана за неделю:';
+            let chunk = header;
+            for (const line of lines) {
+                if ((chunk + '\n' + line).length > 120) {
+                    await sendMailReplyOnPage(page, userId, chunk);
+                    await page.waitForTimeout(3000);
+                    // Перезагружаем диалог перед следующим сообщением
+                    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+                    chunk = line;
+                } else {
+                    chunk += '\n' + line;
+                }
+            }
+            if (chunk) await sendMailReplyOnPage(page, userId, chunk);
+            return null; // уже отправили сами
         }
         if (msg.includes('/статистика')) {
             console.log('[cmd] → /статистика');
