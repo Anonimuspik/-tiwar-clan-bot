@@ -572,7 +572,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             // Возвращаемся на диалог
             await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
             if (!ranked.length) return 'Данных пока нет.';
-            // Разбиваем на сообщения по ~120 символов (лимит игры ~132)
+            // Личные сообщения: лимит ~600 символов. Разбиваем на куски по 500.
             const lines = ranked.map((r, i) => {
                 const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
                 return `${i+1}. ${r.nick} - ${r.totalExp.toLocaleString()}${pctStr}`;
@@ -580,10 +580,9 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const header = 'Топ клана за неделю:';
             let chunk = header;
             for (const line of lines) {
-                if ((chunk + '\n' + line).length > 120) {
+                if ((chunk + '\n' + line).length > 590) {
                     await sendMailReplyOnPage(page, userId, chunk);
                     await page.waitForTimeout(3000);
-                    // Перезагружаем диалог перед следующим сообщением
                     await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
                     chunk = line;
                 } else {
@@ -591,7 +590,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
                 }
             }
             if (chunk) await sendMailReplyOnPage(page, userId, chunk);
-            return null; // уже отправили сами
+            return null;
         }
         if (msg.includes('/статистика')) {
             console.log('[cmd] → /статистика');
