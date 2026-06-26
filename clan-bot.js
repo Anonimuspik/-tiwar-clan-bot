@@ -673,7 +673,10 @@ async function handleQuiz(msgRaw, senderNick, userId, data, page) {
 
         const elapsed = now - (state.questionStartedAt || now);
         const isTimeout = elapsed > QUIZ_ANSWER_MS;
-        const isCorrect = !isTimeout && (msg === correct);
+        // Принимаем и кириллицу и латинские эквиваленты (а=a, б=b, в=v, г=g)
+        const latinMap = { 'a': 'а', 'b': 'б', 'v': 'в', 'g': 'г' };
+        const normalizedMsg = latinMap[msg] || msg;
+        const isCorrect = !isTimeout && (normalizedMsg === correct);
 
         if (isCorrect) state.correct++;
         const next = state.current + 1;
