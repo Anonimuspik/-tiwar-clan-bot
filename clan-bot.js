@@ -356,12 +356,17 @@ async function sendMail(page, userId, text) {
 // ── Чтение почты и обработка команд ──────────────────────────────────────────
 
 async function checkMail(page, data) {
-    await navigate(page, BASE_URL);
+    await navigate(page, BASE_URL, 3000);
     const html = await pageText(page);
+    console.log('[mail] на главной, ищем почту...');
 
     // Проверяем есть ли новая почта
-    if (!html.includes('Новая почта') && !html.includes('/mail/')) return;
+    if (!html.includes('Новая почта')) {
+        console.log('[mail] новых писем нет');
+        return;
+    }
 
+    console.log('[mail] есть новая почта! Заходим...');
     await navigate(page, `${BASE_URL}/mail/`);
     const mailHtml = await pageText(page);
 
@@ -863,11 +868,17 @@ async function banPlayer(page, targetNick, data) {
             }
         }
 
-        // ── Проверка почты каждые 5 минут ────────────────────────────────────
-        const mailKey = `${dateKey}_mail_${Math.floor(Date.now() / 5000)}`;
-        if (!sentToday.has(mailKey)) {
-            sentToday.add(mailKey);
-            await checkMail(page, data);
+        // ── Проверка почты каждые 5 секунд ──────────────────────────────────
+        const mailNow = Date.now();
+        const lastMailCheck = parseInt(data._lastMailCheck || '0', 10);
+        if (mailNow - lastMailCheck >= 5000) {
+            data._lastMailCheck = mailNow;
+            console.log('[mail-tick] проверяем почту...');
+            try {
+                await checkMail(page, data);
+            } catch(e) {
+                console.log('[mail-tick] ошибка:', e.message);
+            }
             await saveData(data);
         }
 
