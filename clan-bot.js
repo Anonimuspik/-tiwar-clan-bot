@@ -38,7 +38,7 @@ function unescapeHtml(s) {
 
 const SCHEDULE = [
     { time: 600,  type: 'morning' },
-    { time: 835,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
+    { time: 842,  type: 'morning' },   // ВРЕМЕННО: разовая проверка, удали после теста
     { time: 1000, type: 'before_fight', fight: 'Клановый колизей',  fightTime: '10:30' },
     { time: 1030, type: 'before_fight', fight: 'Клановый турнир',   fightTime: '11:00' },
     { time: 1330, type: 'before_fight', fight: 'Древние алтари',    fightTime: '14:00' },
@@ -137,24 +137,29 @@ async function pageHtml(page) {
 
 // ── Объявление (ПРАВИЛЬНЫЙ ПУТЬ) ──────────────────────────────────────────────
 
-async function sendAnnouncement(page, text) {
-    console.log(`[announce] === Отправляем объявление ===`);
-    console.log(`[announce] Текст: ${text.substring(0, 80)}...`);
-
-    // Шаг 1: идём на страницу клана
-    console.log(`[announce] Шаг 1: переходим на /clan/${CLAN_ID}/`);
-    await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/`, 2000);
+// Заходит на страницу клана и возвращает свежую ссылку "Управление кланом".
+// Важно: ссылка содержит одноразовый/привязанный к клику токен ?r=..., поэтому
+// её нельзя кэшировать и использовать повторно — каждый раз нужен новый клик.
+async function getFreshAdmUrl(page) {
+    await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/`, 1500);
     const clanHtml = await pageHtml(page);
-
-    // Шаг 2: ищем ссылку "Управление кланом"
-    console.log(`[announce] Шаг 2: ищем ссылку Управление кланом...`);
     const admLinkMatch = clanHtml.match(/href="(\/clan\/\d+\/\d+\/adm\/[^"]+)"/);
     if (!admLinkMatch) {
         console.log(`[announce] ОШИБКА: ссылка Управление кланом не найдена!`);
         console.log(`[announce] HTML фрагмент (поиск adm): ${clanHtml.substring(clanHtml.indexOf('adm') - 50, clanHtml.indexOf('adm') + 100)}`);
-        return;
+        return null;
     }
-    const admUrl = BASE_URL + admLinkMatch[1];
+    return BASE_URL + unescapeHtml(admLinkMatch[1]);
+}
+
+async function sendAnnouncement(page, text) {
+    console.log(`[announce] === Отправляем объявление ===`);
+    console.log(`[announce] Текст: ${text.substring(0, 80)}...`);
+
+    // Шаг 1: идём на страницу клана и кликаем "Управление кланом"
+    console.log(`[announce] Шаг 1-2: переходим на /clan/${CLAN_ID}/ и ищем ссылку Управление кланом...`);
+    let admUrl = await getFreshAdmUrl(page);
+    if (!admUrl) return;
     console.log(`[announce] Ссылка найдена: ${admUrl}`);
 
     // Шаг 3: переходим на страницу управления
@@ -163,7 +168,9 @@ async function sendAnnouncement(page, text) {
     let admHtml = await pageHtml(page);
 
     // Если висит баннер "Клановое объявление: ...Скрыть" от предыдущей отправки —
-    // форма ввода может быть скрыта/не рендериться, пока баннер не закрыт.
+    // форма ввода не рендерится, пока баннер не закрыт. Закрываем баннер, а затем
+    // ОБЯЗАТЕЛЬНО заново кликаем "Управление кланом" с нуля — старую ссылку
+    // с использованным ?r=... повторно открыть нельзя.
     if (admHtml.includes('close_clan_msg=true')) {
         console.log(`[announce] Виден баннер последнего объявления — закрываем...`);
         const closeMatch = admHtml.match(/href="([^"]*close_clan_msg=true[^"]*)"/);
@@ -175,7 +182,11 @@ async function sendAnnouncement(page, text) {
                     ? BASE_URL + closeHref
                     : admUrl.split('?')[0] + closeHref; // admUrl уже содержит https://tiwar.ru — BASE_URL тут не добавляем
             await navigate(page, closeUrl, 1500);
-            // После закрытия возвращаемся на страницу управления заново
+
+            console.log(`[announce] Баннер закрыт — заново кликаем Управление кланом...`);
+            admUrl = await getFreshAdmUrl(page);
+            if (!admUrl) return;
+            console.log(`[announce] Новая ссылка: ${admUrl}`);
             await navigate(page, admUrl, 1500);
             admHtml = await pageHtml(page);
         }
@@ -198,8 +209,8 @@ async function sendAnnouncement(page, text) {
     }
     console.log(`[announce] Поле ввода найдено!`);
 
-    // Шаг 5: вводим текст
-    const finalText = text.substring(0, 132);
+    // Шаг 5: вводим текст (максимум 126 символов — реальный лимит объявления в игре)
+    const finalText = text.substring(0, 126);
     console.log(`[announce] Шаг 5: вводим текст (${finalText.length} символов)`);
     await inputEl.fill(finalText);
 
