@@ -437,7 +437,32 @@ async function fetchLiveExp(page, senderNick) {
     return null;
 }
 
-// ── Команды ───────────────────────────────────────────────────────────────────
+// Живой опыт всех игроков клана (для /топ)
+async function fetchAllLiveExp(page) {
+    console.log('[live-exp-all] Собираем живой опыт всех игроков...');
+    const expMap = {}; // nick → exp
+    let pageNum = 1;
+    while (true) {
+        const url = pageNum === 1
+            ? `${BASE_URL}/clan/${CLAN_ID}/clanexp/today`
+            : `${BASE_URL}/clan/${CLAN_ID}/clanexp/today/${pageNum}`;
+        await navigate(page, url, 1500);
+        const html = await pageHtml(page);
+        const expRegex = /href="\/user\/(\d+)\/">([^<]+?)(?:<span[^>]*>[^<]*<\/span>)*<\/a>(?:<span[^>]*>[^<]*<\/span>)?\s*<b>([\d\s']+)<\/b>/g;
+        let match, found = 0;
+        while ((match = expRegex.exec(html)) !== null) {
+            const nick = match[2].trim();
+            const exp = parseInt(match[3].replace(/[\s']/g, ''), 10);
+            if (nick !== BOT_NICK) { expMap[nick] = exp; found++; }
+        }
+        console.log(`[live-exp-all] Страница ${pageNum}: найдено ${found}`);
+        const hasNext = html.includes(`/clanexp/today/${pageNum + 1}`);
+        if (!hasNext || found === 0) break;
+        pageNum++;
+    }
+    console.log(`[live-exp-all] Всего игроков с опытом: ${Object.keys(expMap).length}`);
+    return expMap;
+}
 
 async function processCommand(msg, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
@@ -505,7 +530,33 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (botRank >= 1) {
         if (msg.includes('/топ')) {
             console.log('[cmd] → /топ');
-            return buildTopText(data);
+            // Берём живой опыт за сегодня для всех
+            const liveExpMap = await fetchAllLiveExp(page);
+            const today = todayKey();
+            // Обновляем кэш
+            for (const [nick, exp] of Object.entries(liveExpMap)) {
+                if (!data.weeklyExp[nick]) data.weeklyExp[nick] = {};
+                data.weeklyExp[nick][today] = exp;
+            }
+            // Считаем полный недельный опыт для каждого
+            const members = Object.keys(data.members).filter(n => !data.members[n].isNew);
+            const ranked = members.map(nick => {
+                const storedExp = data.weeklyExp[nick] || {};
+                const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
+                const todayExp = liveExpMap[nick] ?? storedExp[today] ?? 0;
+                const totalExp = weekOther + todayExp;
+                const req = getRequirements(data.members[nick].gameRank);
+                const weeklyNorm = req.expPerDay * 7;
+                const pct = weeklyNorm ? Math.round((totalExp / weeklyNorm) * 100) : null;
+                return { nick, totalExp, pct };
+            }).sort((a, b) => b.totalExp - a.totalExp).slice(0, 10);
+            // Возвращаемся на диалог
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+            if (!ranked.length) return 'Данных пока нет.';
+            return 'Топ клана (опыт за неделю):\n' + ranked.map((r, i) => {
+                const pctStr = r.pct !== null ? ` (${r.pct}%)` : '';
+                return `${i+1}. ${r.nick} - ${r.totalExp.toLocaleString()}${pctStr}`;
+            }).join('\n');
         }
         if (msg.includes('/статистика')) {
             console.log('[cmd] → /статистика');
@@ -513,12 +564,26 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             if (!targetNick) return 'Укажите ник: /статистика Ник';
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден в клане.`;
-            const exp = getPlayerWeeklyExp(targetNick, data);
+            // Живой опыт за сегодня
+            const todayExp = await fetchLiveExp(page, targetNick);
+            const today = todayKey();
+            if (todayExp !== null) {
+                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
+                data.weeklyExp[targetNick][today] = todayExp;
+            }
+            const storedExp = data.weeklyExp[targetNick] || {};
+            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
+            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
             const battles = getPlayerWeeklyBattles(targetNick, data);
             const req = getRequirements(target.gameRank);
-            const expPct = req.expPerDay ? Math.round((exp/(req.expPerDay*7))*100) : 100;
+            const expPct = req.expPerDay ? Math.round((exp/(req.expPerDay*7))*100) : null;
             const batPct = Math.round((battles/req.battlesPerWeek)*100);
-            return `${targetNick} (${target.gameRank})\nОпыт за неделю: ${exp.toLocaleString()} (${expPct}%)\nСражения: ${battles} (${batPct}%)`;
+            // Возвращаемся на диалог
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+            const expLine = req.expPerDay
+                ? `Опыт: ${exp.toLocaleString()} / ${(req.expPerDay*7).toLocaleString()} (${expPct}%)`
+                : `Опыт: ${exp.toLocaleString()} (без нормы)`;
+            return `${targetNick} (${target.gameRank})\n${expLine}\nСражения: ${battles}/${req.battlesPerWeek} (${batPct}%)`;
         }
     }
 
@@ -532,8 +597,19 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const targetNick = msg.replace('/напомни', '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
+            // Живой опыт
+            const todayExp = await fetchLiveExp(page, targetNick);
+            const today = todayKey();
+            if (todayExp !== null) {
+                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
+                data.weeklyExp[targetNick][today] = todayExp;
+            }
+            const storedExp = data.weeklyExp[targetNick] || {};
+            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
+            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
             const req = getRequirements(target.gameRank);
-            const reminderText = `Привет! Напоминание о норме клана:\nОпыт за неделю: ${getPlayerWeeklyExp(targetNick,data).toLocaleString()} / ${(req.expPerDay*7).toLocaleString()}\nСражения: ${getPlayerWeeklyBattles(targetNick,data)} / ${req.battlesPerWeek}\nПостарайся выполнить норму до конца недели!`;
+            const battles = getPlayerWeeklyBattles(targetNick, data);
+            const reminderText = `Привет! Напоминание о норме клана:\nОпыт: ${exp.toLocaleString()} / ${(req.expPerDay*7).toLocaleString()}\nСражения: ${battles} / ${req.battlesPerWeek}\nПостарайся выполнить норму до конца недели!`;
             await sendMail(page, target.userId, reminderText);
             return `Напоминание отправлено ${targetNick}.`;
         }
@@ -552,7 +628,18 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
             const targetNick = msg.replace('/предупреждение', '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
-            const warnText = `Официальное предупреждение!\nВы не выполняете нормы активности клана.\nОпыт: ${getPlayerWeeklyExp(targetNick,data).toLocaleString()}\nСражения: ${getPlayerWeeklyBattles(targetNick,data)}\nПовысьте активность, иначе вас могут исключить.`;
+            // Живой опыт
+            const todayExp = await fetchLiveExp(page, targetNick);
+            const today = todayKey();
+            if (todayExp !== null) {
+                if (!data.weeklyExp[targetNick]) data.weeklyExp[targetNick] = {};
+                data.weeklyExp[targetNick][today] = todayExp;
+            }
+            const storedExp = data.weeklyExp[targetNick] || {};
+            const weekOther = getWeekDates().filter(d => d !== today).reduce((s,d) => s+(storedExp[d]||0), 0);
+            const exp = weekOther + (todayExp ?? storedExp[today] ?? 0);
+            const battles = getPlayerWeeklyBattles(targetNick, data);
+            const warnText = `Официальное предупреждение!\nВы не выполняете нормы клана.\nОпыт: ${exp.toLocaleString()}\nСражения: ${battles}\nПовысьте активность, иначе вас могут исключить.`;
             await sendMail(page, target.userId, warnText);
             return `Предупреждение отправлено ${targetNick}.`;
         }
@@ -608,10 +695,14 @@ async function collectMembers(page, data) {
         await navigate(page, url);
         const html = await pageHtml(page);
 
-        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>[^<]*<img[^>]*>([^<,]+?)(?:<span[^>]*>[^<]*<\/span>)*,\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
+        // Парсим ник: может содержать <span class="not_here white">'</span> внутри (напр. Tsukiyama')
+        const memberRegex = /href="\/(?:user|clan\/\d+\/redact)\/(\d+)\/[^"]*"[^>]*>[^<]*<img[^>]*>((?:[^<]|<span[^>]*>[^<]*<\/span>)+?),\s*<span[^>]*>(?:<span[^>]*>)?([\w\sА-Яа-яёЁ]+)/g;
         let match, found = 0;
         while ((match = memberRegex.exec(html)) !== null) {
-            const userId = match[1], nick = match[2].trim(), rank = match[3].trim();
+            const userId = match[1];
+            // Убираем <span...>'</span> из ника (офлайн апостроф)
+            const nick = match[2].replace(/<[^>]+>/g, '').trim();
+            const rank = match[3].trim();
             if (nick === BOT_NICK) continue;
             members[nick] = { userId, gameRank: rank };
             found++;
