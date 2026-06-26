@@ -107,24 +107,33 @@ async function gistRequest(method, data = null) {
 }
 
 async function loadData() {
+    const defaults = {
+        members: {},
+        weeklyExp: {},
+        weeklyBattles: {},
+        announcements: {},
+        botRanks: {},
+    };
     try {
         const gist = await gistRequest('GET');
-        const content = gist.files?.['data.json']?.content;
-        if (content) return JSON.parse(content);
+        const raw = gist.files?.['data.json']?.content;
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            const merged = { ...defaults, ...parsed };
+            merged.botRanks = { ...(parsed.botRanks || {}) };
+            merged.botRanks[ADMIN_NICK] = 4;
+            return merged;
+        }
     } catch(e) {
         console.log('[gist] Ошибка загрузки:', e.message);
     }
-    return {
-        members: {},      // { nick: { userId, gameRank, botRank, joinedTracking } }
-        weeklyExp: {},    // { nick: { [date]: exp } }
-        weeklyBattles: {},// { nick: { total: N, dates: [date,...] } }
-        announcements: {},// { [dateKey+type]: true } — уже отправленные
-        botRanks: { [ADMIN_NICK]: 4 }, // принудительно Kaneki = 4
-    };
+    defaults.botRanks[ADMIN_NICK] = 4;
+    return defaults;
 }
 
 async function saveData(data) {
     try {
+        if (!data.botRanks) data.botRanks = {};
         data.botRanks[ADMIN_NICK] = 4; // всегда фиксируем
         await gistRequest('PATCH', {
             files: { 'data.json': { content: JSON.stringify(data, null, 2) } }
