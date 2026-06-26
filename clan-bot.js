@@ -410,9 +410,9 @@ async function checkMail(page, data) {
             /href="\/user\/(\d+)\/">([^<]+)<\/a>[\s\S]{0,300}?<span class="white">([\s\S]*?)<\/span>/g
         )];
         
-        // Берём последнее сообщение НЕ от бота
+        // Берём ПЕРВОЕ сообщение НЕ от бота (в HTML новые идут первыми)
         let msgText = '';
-        for (let i = blocks.length - 1; i >= 0; i--) {
+        for (let i = 0; i < blocks.length; i++) {
             const blockUserId = blocks[i][1];
             const blockText = blocks[i][3].replace(/<[^>]+>/g, '').trim();
             if (blockUserId !== BOT_USER_ID && blockText) {
