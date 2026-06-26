@@ -312,8 +312,51 @@ async function processDialog(page, data, userId) {
     }
 
     const botRank = data.botRanks[senderNick] ?? 0;
-    const member  = data.members[senderNick];
+    let member = data.members[senderNick];
     console.log(`[dialog] Ранг бота: ${botRank} (${BOT_RANKS[botRank]}), в базе: ${!!member}`);
+
+    // Если игрок не в базе — загружаем его данные прямо сейчас
+    if (!member) {
+        console.log(`[dialog] Игрок "${senderNick}" не в базе, пробуем найти на странице клана...`);
+        try {
+            await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/`, 2000);
+            const clanHtml = await pageHtml(page);
+            // Ищем ник на всех страницах клана
+            let foundMember = null;
+            let clanPageNum = 1;
+            while (!foundMember) {
+                const url = clanPageNum === 1 ? `${BASE_URL}/clan/${CLAN_ID}/` : `${BASE_URL}/clan/${CLAN_ID}//${clanPageNum}`;
+                if (clanPageNum > 1) { await navigate(page, url, 2000); }
+                const html = clanPageNum === 1 ? clanHtml : await pageHtml(page);
+                // Ищем строку с ником
+                const escapedNick = senderNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const nickRe = new RegExp(`href="/(user|clan/\\d+/redact)/(\\d+)/"[^>]*>[^>]*>` + escapedNick + `,\\s*<span[^>]*>(?:<span[^>]*>)?([\\w\\sА-Яа-яёЁ]+)`);
+                const m = html.match(nickRe);
+                if (m) {
+                    foundMember = { userId, gameRank: m[3].trim() };
+                    console.log(`[dialog] Найден: userId=${userId}, ранг="${foundMember.gameRank}"`);
+                    data.members[senderNick] = { userId, gameRank: foundMember.gameRank, botRank: botRank, joinedTracking: todayKey(), isNew: false };
+                    member = data.members[senderNick];
+                    break;
+                }
+                const hasNext = html.includes(`/clan/${CLAN_ID}//${clanPageNum + 1}`);
+                if (!hasNext) break;
+                clanPageNum++;
+            }
+            if (!member) {
+                console.log(`[dialog] Игрок "${senderNick}" не найден на страницах клана`);
+                // Добавляем с userId и неизвестным рангом чтобы команды работали
+                data.members[senderNick] = { userId, gameRank: 'Новобранец', botRank: botRank, joinedTracking: todayKey(), isNew: false };
+                member = data.members[senderNick];
+                console.log(`[dialog] Добавлен с рангом по умолчанию: Новобранец`);
+            }
+            // Возвращаемся на диалог
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+        } catch(e) {
+            console.log(`[dialog] Ошибка при поиске игрока:`, e.message);
+            await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 2000);
+        }
+    }
 
     console.log(`[dialog] Обрабатываем команду: "${msgText}"`);
     const reply = await processCommand(msgText, senderNick, userId, botRank, member, data, page);
