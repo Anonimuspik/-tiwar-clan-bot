@@ -888,35 +888,82 @@ async function sendFridayReport(page, data) {
 
 async function banPlayer(page, targetNick, data) {
     console.log(`[ban] Исключаем: ${targetNick}`);
+
+    // Шаг 1: идём на страницу клана и ищем ссылку "Управление кланом" (ADM)
+    await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/`, 2000);
+    let html = await pageHtml(page);
+    const admMatch = html.match(/href="(\/clan\/\d+\/\d+\/adm\/[^"]+)"/);
+    if (!admMatch) {
+        console.log(`[ban] ADM ссылка не найдена — нет прав`);
+        return `Нет прав для исключения игроков.`;
+    }
+    const admBase = admMatch[1].replace(/\?.*$/, ''); // убираем ?r=... из базового пути
+    // admBase вида /clan/41140/5/adm/  — берём только /clan/41140/
+    // Нам нужно просто зайти на ADM, там будет список с redact-ссылками
+    const admUrl = BASE_URL + admMatch[1];
+    console.log(`[ban] Переходим на ADM: ${admUrl}`);
+    await navigate(page, admUrl, 2000);
+
+    // Шаг 2: ищем игрока по страницам клана (через ADM страницы с redact-ссылками)
+    // ADM даёт нам доступ к /clan/41140/redact/ID/ — но список игроков на обычных страницах
+    // Нужно найти userId игрока — берём его со страниц /clan/41140//N
+    let targetId = null;
     let pageNum = 1;
-    while (true) {
+    while (!targetId) {
         const url = pageNum === 1 ? `${BASE_URL}/clan/${CLAN_ID}/` : `${BASE_URL}/clan/${CLAN_ID}//${pageNum}`;
-        await navigate(page, url);
-        const html = await pageHtml(page);
-        if (html.includes(targetNick)) {
-            const allMatches = [...html.matchAll(new RegExp(`href="/clan/${CLAN_ID}/redact/(\\d+)/"[\\s\\S]{0,200}?>${targetNick.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')},`,'g'))];
-            if (allMatches.length > 0) {
-                const targetId = allMatches[0][1];
-                console.log(`[ban] Найден userId=${targetId}`);
-                await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/redact/${targetId}/`);
-                const deleteLink = await page.$(`a[href*="/redact/${targetId}/delete/"]`);
-                if (deleteLink) {
-                    const href = await deleteLink.getAttribute('href');
-                    await navigate(page, BASE_URL + href);
-                    const confirmLink = await page.$(`a[href*="yes=1"]`);
-                    if (confirmLink) {
-                        await confirmLink.click(); await page.waitForTimeout(2000);
-                        delete data.members[targetNick]; await saveData(data);
-                        return `Игрок ${targetNick} исключён из клана.`;
-                    }
-                }
-            }
+        await navigate(page, url, 1500);
+        html = await pageHtml(page);
+        const escapedNick = targetNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Ищем href="/user/ID/" рядом с ником (на обычной странице есть у всех)
+        const userRegex = new RegExp(
+            `href="/user/(\\d+)/"[^>]*>[^>]*>` +
+            escapedNick + `(?:<span[^>]*>[^<]*<\/span>)?,`,
+            'g'
+        );
+        const userMatches = [...html.matchAll(userRegex)];
+        console.log(`[ban] Стр. ${pageNum}: ник "${targetNick}" ${html.includes(targetNick) ? 'есть' : 'нет'}, совпадений: ${userMatches.length}`);
+        if (userMatches.length > 0) {
+            targetId = userMatches[0][1];
+            console.log(`[ban] Найден userId=${targetId}`);
+            break;
         }
         const hasNext = html.includes(`/clan/${CLAN_ID}//${pageNum + 1}`);
         if (!hasNext) break;
         pageNum++;
     }
-    return `Игрок "${targetNick}" не найден в клане.`;
+
+    if (!targetId) {
+        return `Игрок "${targetNick}" не найден в клане.`;
+    }
+
+    // Шаг 3: переходим на redact страницу игрока (доступна после ADM)
+    console.log(`[ban] Переходим на redact: /clan/${CLAN_ID}/redact/${targetId}/`);
+    await navigate(page, `${BASE_URL}/clan/${CLAN_ID}/redact/${targetId}/`, 2000);
+    html = await pageHtml(page);
+
+    // Шаг 4: ищем ссылку "Исключить из клана"
+    const deleteMatch = html.match(/href="(\/clan\/[^"]*\/redact\/\d+\/delete\/[^"]*)"/);
+    if (!deleteMatch) {
+        console.log(`[ban] Кнопка исключения не найдена. HTML: ${html.substring(0, 300)}`);
+        return `Не удалось найти кнопку исключения для ${targetNick}.`;
+    }
+    console.log(`[ban] Кнопка исключения: ${deleteMatch[1]}`);
+    await navigate(page, BASE_URL + deleteMatch[1], 2000);
+
+    // Шаг 5: подтверждаем "Да, уверен"
+    html = await pageHtml(page);
+    const confirmMatch = html.match(/href="([^"]*yes=1[^"]*)"/);
+    if (!confirmMatch) {
+        console.log(`[ban] Кнопка подтверждения не найдена`);
+        return `Ошибка подтверждения исключения.`;
+    }
+    console.log(`[ban] Подтверждаем: ${confirmMatch[1]}`);
+    await navigate(page, BASE_URL + confirmMatch[1], 2000);
+
+    delete data.members[targetNick];
+    await saveData(data);
+    console.log(`[ban] ${targetNick} исключён успешно`);
+    return `Игрок ${targetNick} исключён из клана.`;
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
