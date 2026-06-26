@@ -270,14 +270,16 @@ async function processDialog(page, data, userId) {
     const blocks = [...convHtml.matchAll(blockRegex)];
     console.log(`[dialog] Найдено блоков сообщений: ${blocks.length}`);
 
-    let msgText = '';
+    let msgText = '';      // lowercase — для сравнения команд
+    let msgOrig = '';      // оригинал — для извлечения аргументов (ников)
     for (const block of blocks) {
         const blockUserId = block[1];
         const blockNick = block[2].trim();
         const blockText = block[3].replace(/<[^>]+>/g, '').trim();
         console.log(`[dialog] Блок от userId=${blockUserId} (${blockNick}): "${blockText.substring(0,50)}"`);
         if (blockUserId !== BOT_USER_ID && blockText) {
-            msgText = blockText.toLowerCase().trim();
+            msgOrig = blockText.trim();
+            msgText = msgOrig.toLowerCase();
             console.log(`[dialog] Берём это сообщение как команду: "${msgText}"`);
             break;
         }
@@ -359,7 +361,7 @@ async function processDialog(page, data, userId) {
     }
 
     console.log(`[dialog] Обрабатываем команду: "${msgText}"`);
-    const reply = await processCommand(msgText, senderNick, userId, botRank, member, data, page);
+    const reply = await processCommand(msgText, msgOrig, senderNick, userId, botRank, member, data, page);
 
     // Возвращаемся на диалог после processCommand (он мог переключить страницу)
     console.log(`[dialog] Возвращаемся на диалог для отправки ответа...`);
@@ -509,7 +511,7 @@ async function fetchClanRanks(page) {
     return rankMap;
 }
 
-async function processCommand(msg, senderNick, userId, botRank, member, data, page) {
+async function processCommand(msg, msgOrig, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
 
     if (msg.includes('/помощь') || msg.includes('/команды')) {
@@ -551,7 +553,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
 
     if (msg.includes('/в чат от моего имени')) {
         console.log('[cmd] → /в чат');
-        const text = msg.replace('/в чат от моего имени', '').trim();
+        const text = msgOrig.replace(/\/в чат от моего имени/i, '').trim();
         if (!text) return 'Напишите текст: /в чат от моего имени текст';
         await sendClanChat(page, `Сообщение от ${senderNick}: ${text}`);
         return 'Сообщение отправлено в чат клана.';
@@ -616,7 +618,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
         }
         if (msg.includes('/статистика')) {
             console.log('[cmd] → /статистика');
-            const targetNick = msg.replace('/статистика', '').trim();
+            const targetNick = msgOrig.replace(/\/статистика/i, '').trim();
             if (!targetNick) return 'Укажите ник: /статистика Ник';
             // Ищем сначала в базе, потом прямо на сайте
             let target = data.members[targetNick];
@@ -651,7 +653,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
         }
         if (msg.includes('/напомни')) {
             console.log('[cmd] → /напомни');
-            const targetNick = msg.replace('/напомни', '').trim();
+            const targetNick = msgOrig.replace(/\/напомни/i, '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
             const req = getRequirements(target.gameRank);
@@ -666,14 +668,14 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (botRank >= 3) {
         if (msg.includes('/сделай объявление')) {
             console.log('[cmd] → /сделай объявление');
-            const text = msg.replace('/сделай объявление', '').trim();
+            const text = msgOrig.replace(/\/сделай объявление/i, '').trim();
             if (!text) return 'Напишите текст: /сделай объявление текст';
             await sendAnnouncement(page, text);
             return 'Объявление отправлено.';
         }
         if (msg.includes('/предупреждение')) {
             console.log('[cmd] → /предупреждение');
-            const targetNick = msg.replace('/предупреждение', '').trim();
+            const targetNick = msgOrig.replace(/\/предупреждение/i, '').trim();
             const target = data.members[targetNick];
             if (!target) return `Игрок "${targetNick}" не найден.`;
             const exp = getPlayerWeeklyExp(targetNick, data);
@@ -687,7 +689,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
     if (botRank >= 4) {
         if (msg.includes('/повысить')) {
             console.log('[cmd] → /повысить');
-            const targetNick = msg.replace('/повысить', '').trim();
+            const targetNick = msgOrig.replace(/\/повысить/i, '').trim();
             if (!data.members[targetNick]) return `Игрок "${targetNick}" не найден.`;
             const cur = data.botRanks[targetNick] ?? 0;
             if (cur >= 3) return `${targetNick} уже имеет максимальный ранг (${BOT_RANKS[cur]}).`;
@@ -698,7 +700,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
         }
         if (msg.includes('/понизить')) {
             console.log('[cmd] → /понизить');
-            const targetNick = msg.replace('/понизить', '').trim();
+            const targetNick = msgOrig.replace(/\/понизить/i, '').trim();
             if (!data.members[targetNick]) return `Игрок "${targetNick}" не найден.`;
             if (targetNick === ADMIN_NICK) return 'Нельзя понизить Верхушку.';
             const cur = data.botRanks[targetNick] ?? 0;
@@ -713,7 +715,7 @@ async function processCommand(msg, senderNick, userId, botRank, member, data, pa
         }
         if (msg.includes('/бан')) {
             console.log('[cmd] → /бан');
-            const targetNick = msg.replace('/бан', '').trim();
+            const targetNick = msgOrig.replace(/\/бан/i, '').trim();
             return await banPlayer(page, targetNick, data);
         }
     }
