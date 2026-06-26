@@ -19,13 +19,15 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Run clan bot
+        id: run_bot
         env:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON_MONITOR }}
           GIST_ID:      ${{ secrets.GIST_ID }}
           GIST_TOKEN:   ${{ secrets.GIST_TOKEN }}
         run: node clan-bot.js
       - name: Trigger next run
-        if: always()
+        # Только если бот завершился сам (не был отменён вручную)
+        if: steps.run_bot.conclusion == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
