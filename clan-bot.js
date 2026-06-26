@@ -371,12 +371,19 @@ async function checkMail(page, data) {
     const mailHtml = await pageText(page);
 
     // Ищем диалоги с новыми сообщениями (dgreen +N)
-    const newMailRegex = /href="\/mail\/(\d+)\/\d+\/"[^>]*>.*?dgreen">\+(\d+)/gs;
+    const newMailRegex = /href="\/mail\/(\d+)\/\d+\/"/g;
     let match;
     const toProcess = [];
 
     while ((match = newMailRegex.exec(mailHtml)) !== null) {
-        toProcess.push({ userId: match[1], count: parseInt(match[2]) });
+        const uid = match[1];
+        // Проверяем что рядом есть +N (новое сообщение)
+        const nearby = mailHtml.substring(match.index, match.index + 400);
+        if (nearby.includes('dgreen') && nearby.includes('+')) {
+            if (!toProcess.find(x => x.userId === uid)) {
+                toProcess.push({ userId: uid });
+            }
+        }
     }
 
     if (toProcess.length === 0) return;
@@ -387,15 +394,34 @@ async function checkMail(page, data) {
         await navigate(page, `${BASE_URL}/mail/${userId}/0/`);
         const convHtml = await pageText(page);
 
-        // Определяем ник отправителя
-        const nickMatch = convHtml.match(/class="yellow">([\w\s\-А-Яа-яёЁ']+)<\/span>/);
-        if (!nickMatch) continue;
+        // Определяем ник отправителя — берём из заголовка диалога
+        const nickMatch = convHtml.match(/Диалог с ([^<"]+)</);
+        if (!nickMatch) {
+            console.log('[mail] не удалось определить ник отправителя');
+            continue;
+        }
         const senderNick = nickMatch[1].trim();
+        console.log('[mail] сообщение от:', senderNick);
 
-        // Последнее входящее сообщение
-        const msgMatch = convHtml.match(/class="white">([\s\S]*?)<\/span>/);
-        if (!msgMatch) continue;
-        const msgText = msgMatch[1].trim().toLowerCase();
+        // Последнее входящее сообщение — ищем последнее сообщение от собеседника
+        // Формат: <a href="/user/ID/">НИК</a> ... текст сообщения
+        const msgBlocks = [...convHtml.matchAll(/href="\/user\/\d+\/"[^>]*>([^<]+)<\/a>[^|]*\|\s*[\d:]+<\/span>\s*<\/div>\s*<div[^>]*>([\s\S]*?)<\/div>/g)];
+        let msgText = '';
+        if (msgBlocks.length > 0) {
+            // Берём последнее сообщение
+            const lastBlock = msgBlocks[msgBlocks.length - 1];
+            msgText = lastBlock[2].replace(/<[^>]+>/g, '').trim().toLowerCase();
+        } else {
+            // Запасной вариант — ищем просто текст после ника
+            const fallback = convHtml.match(new RegExp(senderNick + '[\s\S]{0,200}?<br[^>]*>([^<]{3,200})'));
+            if (fallback) msgText = fallback[1].trim().toLowerCase();
+        }
+        
+        if (!msgText) {
+            console.log('[mail] не удалось извлечь текст сообщения');
+            continue;
+        }
+        console.log('[mail] текст сообщения:', msgText.substring(0, 80));
 
         // Проверяем — из нашего клана?
         const isOurClan = await checkUserClan(page, userId);
