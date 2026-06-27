@@ -125,7 +125,7 @@ function isAllSeen(msgs, last) {
 async function processChatTick(page, url, chatType, sendFn, forceSpeak, data) {
     try {
         console.log(`[ai:${chatType}] Читаем чат...`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.waitForTimeout(1500);
         const html = await page.evaluate(() => document.body.innerHTML);
         const msgs = parseChatMessages(html);
@@ -213,7 +213,7 @@ async function readNextForumTopic(page, data) {
     magi.currentAction = `Форум — читаю: ${topic.title.substring(0, 40)}`;
     try {
         console.log(`[ai:forum] Читаем: ${topic.title}`);
-        await page.goto(BASE_URL + topic.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.goto(BASE_URL + topic.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.waitForTimeout(1500);
         const html = await page.evaluate(() => document.body.innerHTML);
         const textBlocks = [];
@@ -273,7 +273,7 @@ function handleAiChatCommand(msg, botRank, data) {
 // Возвращает true если: есть новые сообщения ИЛИ кто-то обратился к боту
 async function shouldForceReply(page, url, chatType, data) {
     try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.waitForTimeout(1000);
         const html = await page.evaluate(() => document.body.innerHTML);
         const msgs = parseChatMessages(html);
