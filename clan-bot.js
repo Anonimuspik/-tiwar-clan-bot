@@ -8,6 +8,8 @@ const {
 const {
     handleAiChatCommand,
     tickAiChat,
+    handleLsMessage,
+    splitMessage,
 } = require('./ai_chat');
 
 const BASE_URL      = 'https://tiwar.ru';
@@ -444,6 +446,26 @@ async function processDialog(page, data, userId) {
     }
     if (!reply) {
         reply = await processCommand(msgText, msgOrig, senderNick, userId, botRank, member, data, page);
+    }
+    // Если ни квиз ни команда не ответили — пробуем ЛС-режим МАГИ (если включён)
+    if (!reply) {
+        const lsReply = await handleLsMessage(msgOrig, data);
+        if (lsReply) {
+            // Длинный ответ разбиваем на части
+            const parts = splitMessage(lsReply, 490);
+            if (parts.length === 1) {
+                reply = lsReply;
+            } else {
+                // Отправляем все части по одной
+                for (const part of parts) {
+                    await navigate(page, `${BASE_URL}/mail/${userId}/0/`, 1500);
+                    await sendMailReplyOnPage(page, userId, part);
+                }
+                data[lastRepliedKey] = msgText;
+                console.log('[dialog] ЛС-МАГИ: отправлено несколько частей');
+                return;
+            }
+        }
     }
 
     // Возвращаемся на диалог после processCommand (он мог переключить страницу)
