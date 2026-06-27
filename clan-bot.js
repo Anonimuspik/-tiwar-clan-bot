@@ -732,7 +732,7 @@ async function processCommand(msg, msgOrig, senderNick, userId, botRank, member,
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
 
     // Команды управления ИИ-чатом и форумом
-    const aiCmdReply = handleAiChatCommand(msg, botRank);
+    const aiCmdReply = handleAiChatCommand(msg, botRank, data);
     if (aiCmdReply !== null) return aiCmdReply;
 
     if (msg.includes('/помощь') || msg.includes('/команды')) {
@@ -1345,7 +1345,7 @@ async function banPlayer(page, targetNick, data) {
 
         // AI-чат + форум тик (каждые 5 сек)
         try {
-            await tickAiChat(page, sendClanChat, sendTitansChat);
+            await tickAiChat(page, sendClanChat, sendTitansChat, data);
         } catch(e) {
             console.log('[ai-chat] ОШИБКА в тике:', e.message);
         }
