@@ -249,6 +249,8 @@ async function readNextForumTopic(page, data) {
             knowledge.push({ title: topic.title, summary, url: topic.url });
             if (knowledge.length > 40) knowledge.shift();
             console.log(`[ai:forum] Изучено: "${topic.title}"`);
+            // Обновляем currentReading чтобы дашборд показал summary
+            magi.currentReading = { title: topic.title, url: BASE_URL + topic.url, startedAt: magi.currentReading.startedAt };
         }
     } catch(e) { console.log(`[ai:forum] Ошибка:`, e.message); }
 }
