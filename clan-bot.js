@@ -731,7 +731,7 @@ async function handleQuiz(msgRaw, senderNick, userId, data, page) {
 async function processCommand(msg, msgOrig, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
 
-    // Команды управления ИИ-чатом
+    // Команды управления ИИ-чатом и форумом
     const aiCmdReply = handleAiChatCommand(msg, botRank);
     if (aiCmdReply !== null) return aiCmdReply;
 
@@ -1070,7 +1070,7 @@ function buildHelpText(botRank) {
     let t = `Ваш ранг: ${BOT_RANKS[botRank]}\nКоманды:\n/start — запуск бота\n/форум (/forum) — тест форума\n/помощь\n/мой опыт за неделю\n/мои сражения за неделю\n/профиль\n/в чат от моего имени (текст)\n`;
     if (botRank >= 1) t += '/топ\n/статистика (ник)\n';
     if (botRank >= 2) t += '/кто не пришёл\n/напомни (ник)\n';
-    if (botRank >= 3) t += '/сделай объявление (текст)\n/предупреждение (ник)\n';
+    if (botRank >= 3) t += '/сделай объявление (текст)\n/предупреждение (ник)\n/ии клан чат вкл|выкл\n/ии чат вкл|выкл\n/узнай о игре вкл|выкл\n/расскажи что узнала\n/ии статус\n';
     if (botRank >= 4) t += '/повысить (ник)\n/понизить (ник)\n/бан (ник)\n/отчёт\n';
     return t;
 }
@@ -1343,16 +1343,11 @@ async function banPlayer(page, targetNick, data) {
         }
         await saveData(data);
 
-        // AI-чат тик (каждые ~30 сек = 6 тиков по 5 сек)
-        if (!data._aiTick) data._aiTick = 0;
-        data._aiTick++;
-        if (data._aiTick >= 6) {
-            data._aiTick = 0;
-            try {
-                await tickAiChat(page, sendClanChat, sendTitansChat);
-            } catch(e) {
-                console.log('[ai-chat] ОШИБКА в тике:', e.message);
-            }
+        // AI-чат + форум тик (каждые 5 сек)
+        try {
+            await tickAiChat(page, sendClanChat, sendTitansChat);
+        } catch(e) {
+            console.log('[ai-chat] ОШИБКА в тике:', e.message);
         }
 
         await page.waitForTimeout(TICK);
