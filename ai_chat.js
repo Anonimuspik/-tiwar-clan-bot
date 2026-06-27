@@ -323,15 +323,26 @@ async function shouldForceReply(page, url, chatType, data) {
 async function tickAiChat(page, sendClanChatFn, sendTitansChatFn, data) {
     const magi = getMagi(data);
 
+    // За один тик обрабатываем только ОДИН чат — чтобы не слать два сообщения подряд
     if (isAiClanEnabled(data)) {
         clanTickCount++;
-        // Всегда отвечаем если есть новые сообщения или обращение к боту
         const shouldClanForced = await shouldForceReply(page, CLAN_CHAT_URL, 'clan', data);
         if (shouldClanForced || clanTickCount >= CLAN_TICK_THRESHOLD) {
             clanTickCount = 0;
             magi.currentAction = `Чат клана — мониторинг и ответы`;
             magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, CLAN_CHAT_URL, 'clan', sendClanChatFn, !shouldClanForced, data);
+            // После клана — выходим, титаны подождут следующего тика
+            if (isForumLearning(data)) {
+                forumTickCount++;
+                if (forumTickCount >= FORUM_TICK_THRESHOLD) {
+                    forumTickCount = 0;
+                    magi.currentAction = `Форум — строит очередь тем...`;
+                    magi.lastActionAt = new Date().toISOString();
+                    await readNextForumTopic(page, data);
+                }
+            }
+            return;
         }
     }
     if (isAiTitansEnabled(data)) {
@@ -342,8 +353,19 @@ async function tickAiChat(page, sendClanChatFn, sendTitansChatFn, data) {
             magi.currentAction = `Чат Титанов — мониторинг и ответы`;
             magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, TITANS_CHAT_URL, 'titans', sendTitansChatFn, !shouldTitansForced, data);
+            if (isForumLearning(data)) {
+                forumTickCount++;
+                if (forumTickCount >= FORUM_TICK_THRESHOLD) {
+                    forumTickCount = 0;
+                    magi.currentAction = `Форум — строит очередь тем...`;
+                    magi.lastActionAt = new Date().toISOString();
+                    await readNextForumTopic(page, data);
+                }
+            }
+            return;
         }
     }
+    // Если ни один чат не сработал — читаем форум
     if (isForumLearning(data)) {
         forumTickCount++;
         if (forumTickCount >= FORUM_TICK_THRESHOLD) {
