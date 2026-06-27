@@ -139,7 +139,7 @@ async function saveData(data) {
 
 async function navigate(page, url, wait = 2000) {
     console.log(`[nav] Переходим: ${url}`);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(wait);
     console.log(`[nav] Загружено: ${page.url()}`);
 }
@@ -1340,6 +1340,13 @@ async function banPlayer(page, targetNick, data) {
         } catch(e) {
             console.log('[mail] ОШИБКА:', e.message);
             console.log('[mail] Stack:', e.stack?.substring(0, 200));
+            // Сбрасываем страницу после таймаута чтобы tickAiChat работал нормально
+            try {
+                console.log('[mail] Восстанавливаем страницу после ошибки...');
+                await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            } catch(e2) {
+                console.log('[mail] Не удалось восстановить страницу:', e2.message);
+            }
         }
         await saveData(data);
 
@@ -1349,6 +1356,8 @@ async function banPlayer(page, targetNick, data) {
         } catch(e) {
             console.log('[ai-chat] ОШИБКА в тике:', e.message);
         }
+        // Сохраняем статус МАГИ (мысли, currentAction, lastActionAt) после каждого тика
+        await saveData(data);
 
         await page.waitForTimeout(TICK);
     }
