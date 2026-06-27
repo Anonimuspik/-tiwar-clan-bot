@@ -181,7 +181,7 @@ async function buildForumQueue(page) {
     forumQueue = [];
     for (const section of FORUM_SECTIONS) {
         try {
-            await page.goto(BASE_URL + section, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.goto(BASE_URL + section, { waitUntil: 'domcontentloaded', timeout: 45000 });
             await page.waitForTimeout(1500);
             const html = await page.evaluate(() => document.body.innerHTML);
             const re = /href="(\/forum\/topic\/\d+[^"]*)"[^>]*>([^<]{5,80})</g;
@@ -193,20 +193,36 @@ async function buildForumQueue(page) {
             }
         } catch(e) { console.log(`[ai:forum] Ошибка ${section}:`, e.message); }
     }
+    // Помечаем очередь построенной даже если часть секций не загрузилась —
+    // иначе при пустой очереди будет бесконечный цикл buildForumQueue
     forumQueueBuilt = true;
     console.log(`[ai:forum] Очередь: ${forumQueue.length} тем`);
+    // Если совсем ничего не загрузилось — сбросим флаг через 5 минут (retry)
+    if (forumQueue.length === 0) {
+        console.log('[ai:forum] Очередь пуста — повтор через 5 мин');
+        setTimeout(() => { forumQueueBuilt = false; }, 5 * 60 * 1000);
+    }
 }
 
 async function readNextForumTopic(page, data) {
     if (!forumQueueBuilt) { await buildForumQueue(page); return; }
     if (forumQueue.length === 0) {
+        // Очередь кончилась — перестраиваем, но НЕ сбрасываем forumVisited
+        // чтобы не перечитывать уже изученные темы
         forumQueueBuilt = false;
-        forumVisited = new Set();
         return;
     }
     const topic = forumQueue.shift();
     if (forumVisited.has(topic.url)) return;
     forumVisited.add(topic.url);
+
+    // Не читаем если тема уже есть в базе знаний
+    const knowledge = getKnowledgeArr(data);
+    if (knowledge.some(k => k.url === topic.url)) {
+        console.log(`[ai:forum] Уже изучено: "${topic.title}" — пропускаем`);
+        return;
+    }
+
     // Показываем что читаем прямо сейчас
     const magi = getMagi(data);
     magi.currentReading = { title: topic.title, url: BASE_URL + topic.url, startedAt: new Date().toISOString() };
@@ -230,7 +246,6 @@ async function readNextForumTopic(page, data) {
             content: `Форум игры "Битва Титанов", тема: "${topic.title}".\n\n${textBlocks.join('\n').substring(0, 900)}\n\nКраткое резюме 1-2 предложения: что это, зачем в игре. По-русски.`,
         }], 150);
         if (summary && summary.length > 10) {
-            const knowledge = getKnowledgeArr(data);
             knowledge.push({ title: topic.title, summary, url: topic.url });
             if (knowledge.length > 40) knowledge.shift();
             console.log(`[ai:forum] Изучено: "${topic.title}"`);
