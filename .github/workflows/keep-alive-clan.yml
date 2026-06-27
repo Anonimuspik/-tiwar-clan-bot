@@ -24,9 +24,9 @@ jobs:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON_MONITOR }}
           GIST_ID:      ${{ secrets.GIST_ID }}
           GIST_TOKEN:   ${{ secrets.GIST_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: node clan-bot.js
       - name: Trigger next run
-        # Только если бот завершился сам (не был отменён вручную)
         if: steps.run_bot.conclusion == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
