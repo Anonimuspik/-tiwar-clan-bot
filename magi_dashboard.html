@@ -202,16 +202,15 @@ async function load() {
   document.getElementById('statusBar').textContent = '⏳ Загрузка...';
 
   try {
-    // cache: no-store + случайный параметр чтобы обойти кэш браузера и GitHub CDN
+    // случайный параметр _=timestamp чтобы обойти кэш браузера
     const res = await fetch(
       `https://api.github.com/gists/${gistId}?_=${Date.now()}`,
       {
         headers: {
           'Authorization': `token ${token}`,
           'Accept': 'application/vnd.github.v3+json',
-          'Cache-Control': 'no-store',
         },
-        cache: 'no-store',
+
       }
     );
 
