@@ -5,6 +5,10 @@ const {
     getRandomQuestions, getQuizState, setQuizState,
     formatQuestion, CORRECT_ANSWERS
 } = require('./forum_quiz');
+const {
+    handleAiChatCommand,
+    tickAiChat,
+} = require('./ai_chat');
 
 const BASE_URL      = 'https://tiwar.ru';
 const CLAN_ID       = '41140';
@@ -727,6 +731,10 @@ async function handleQuiz(msgRaw, senderNick, userId, data, page) {
 async function processCommand(msg, msgOrig, senderNick, userId, botRank, member, data, page) {
     console.log(`[cmd] Команда: "${msg}" от ${senderNick}`);
 
+    // Команды управления ИИ-чатом
+    const aiCmdReply = handleAiChatCommand(msg, botRank);
+    if (aiCmdReply !== null) return aiCmdReply;
+
     if (msg.includes('/помощь') || msg.includes('/команды')) {
         console.log('[cmd] → /помощь');
         return buildHelpText(botRank);
@@ -1095,6 +1103,16 @@ async function sendClanChat(page, text) {
     await page.waitForTimeout(1500);
 }
 
+async function sendTitansChat(page, text) {
+    console.log('[titans-chat] Отправляем в чат Титанов:', text.substring(0,50));
+    await navigate(page, 'https://tiwar.ru/chat/titans/changeRoom/?r=23346998');
+    const input = await page.$('input[type="text"], textarea');
+    if (!input) { console.log('[titans-chat] Поле ввода не найдено!'); return; }
+    await input.fill(text);
+    await input.press('Enter');
+    await page.waitForTimeout(1500);
+}
+
 async function sendFridayReport(page, data) {
     console.log('[report] Отправляем пятничный отчёт...');
     const report = buildWeeklyReport(data);
@@ -1324,6 +1342,18 @@ async function banPlayer(page, targetNick, data) {
             console.log('[mail] Stack:', e.stack?.substring(0, 200));
         }
         await saveData(data);
+
+        // AI-чат тик (каждые ~30 сек = 6 тиков по 5 сек)
+        if (!data._aiTick) data._aiTick = 0;
+        data._aiTick++;
+        if (data._aiTick >= 6) {
+            data._aiTick = 0;
+            try {
+                await tickAiChat(page, sendClanChat, sendTitansChat);
+            } catch(e) {
+                console.log('[ai-chat] ОШИБКА в тике:', e.message);
+            }
+        }
 
         await page.waitForTimeout(TICK);
     }
