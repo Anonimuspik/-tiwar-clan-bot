@@ -297,11 +297,13 @@ async function shouldForceReply(page, url, chatType, data) {
         const lastSeen = chatType === 'clan' ? lastSeenClan : lastSeenTitans;
 
         // Проверяем обращение к боту (Монитор Клана в тексте)
-        const hasDirectCall = msgs.some(m =>
-            m.text.toLowerCase().includes('монитор клана') ||
-            m.text.toLowerCase().includes('monitor') ||
-            m.text.includes('18170326')
-        );
+        const hasDirectCall = msgs.some(m => {
+            const t = m.text.toLowerCase();
+            return t.includes('монитор') || t.includes('monitor') ||
+                   t.includes('маги') || t.includes('magi') ||
+                   t.includes('бот') || t.includes('не ии') ||
+                   t.includes('18170326');
+        }) || html.includes('/user/18170326/');
         if (hasDirectCall) {
             console.log(`[ai:${chatType}] Прямое обращение к боту — отвечаем немедленно`);
             return true;
