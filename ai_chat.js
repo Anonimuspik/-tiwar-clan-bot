@@ -84,11 +84,17 @@ async function callGroq(messages, maxTokens = 120) {
             let raw = '';
             res.on('data', c => raw += c);
             res.on('end', () => {
-                try { resolve(JSON.parse(raw)?.choices?.[0]?.message?.content?.trim() || ''); }
-                catch(e) { resolve(''); }
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.error) { console.log('[groq] ОШИБКА: ' + JSON.stringify(parsed.error)); resolve(''); return; }
+                    const content = parsed?.choices?.[0]?.message?.content?.trim() || '';
+                    if (!content) console.log('[groq] Пустой ответ HTTP=' + res.statusCode + ' body=' + raw.substring(0,300));
+                    resolve(content);
+                }
+                catch(e) { console.log('[groq] Парсинг ошибка: ' + raw.substring(0,200)); resolve(''); }
             });
         });
-        req.on('error', () => resolve(''));
+        req.on('error', (e) => { console.log('[groq] Сетевая ошибка: ' + e.message); resolve(''); });
         req.write(body);
         req.end();
     });
