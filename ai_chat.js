@@ -2,8 +2,10 @@
 const https = require('https');
 
 const GROQ_API_KEY   = process.env.GROQ_API_KEY || '';
-const CHAT_TICK_SEC  = 60;
+const CHAT_TICK_SEC  = 5;   // писать каждые ~5 вызовов tickAiChat (≈ раз в минуту с учётом задержек цикла)
 const FORUM_TICK_MIN = 3;
+const CHAT_TICK_THRESHOLD  = 5;  // сколько вызовов tickAiChat ждать перед отправкой в чат
+const FORUM_TICK_THRESHOLD = 4;  // сколько вызовов tickAiChat ждать перед чтением форума
 
 const CLAN_CHAT_URL   = 'https://tiwar.ru/chat/clan/changeRoom/?r=8876594';
 const TITANS_CHAT_URL = 'https://tiwar.ru/chat/titans/changeRoom/?r=23346998';
@@ -144,6 +146,11 @@ async function processChatTick(page, url, chatType, sendFn, forceSpeak, data) {
 
         const final = reply.substring(0, 195);
         console.log(`[ai:${chatType}] Отправляем: ${final}`);
+        // Сохраняем последнюю мысль в data для дашборда
+        const magi = getMagi(data);
+        if (!magi.thoughts) magi.thoughts = [];
+        magi.thoughts.unshift({ text: final, chat: chatType, at: new Date().toISOString() });
+        if (magi.thoughts.length > 10) magi.thoughts = magi.thoughts.slice(0, 10);
         await sendFn(page, final);
 
     } catch(e) {
@@ -183,6 +190,10 @@ async function readNextForumTopic(page, data) {
     const topic = forumQueue.shift();
     if (forumVisited.has(topic.url)) return;
     forumVisited.add(topic.url);
+    // Показываем что читаем прямо сейчас
+    const magi = getMagi(data);
+    magi.currentReading = { title: topic.title, url: BASE_URL + topic.url, startedAt: new Date().toISOString() };
+    magi.currentAction = `Форум — читаю: ${topic.title.substring(0, 40)}`;
     try {
         console.log(`[ai:forum] Читаем: ${topic.title}`);
         await page.goto(BASE_URL + topic.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
@@ -240,26 +251,34 @@ function handleAiChatCommand(msg, botRank, data) {
 
 // ── Главный тик ───────────────────────────────────────────────────────────────
 async function tickAiChat(page, sendClanChatFn, sendTitansChatFn, data) {
+    const magi = getMagi(data);
+
     if (isAiClanEnabled(data)) {
         clanTickCount++;
-        if (clanTickCount >= Math.floor(CHAT_TICK_SEC / 5)) {
+        if (clanTickCount >= CHAT_TICK_THRESHOLD) {
             clanTickCount = 0;
             const forceSpeak = (Math.floor(Date.now() / (5 * 60 * 1000)) % 5 === 0);
+            magi.currentAction = `Чат клана — мониторинг и ответы`;
+            magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, CLAN_CHAT_URL, 'clan', sendClanChatFn, forceSpeak, data);
         }
     }
     if (isAiTitansEnabled(data)) {
         titansTickCount++;
-        if (titansTickCount >= Math.floor(CHAT_TICK_SEC / 5)) {
+        if (titansTickCount >= CHAT_TICK_THRESHOLD) {
             titansTickCount = 0;
             const forceSpeak = (Math.floor(Date.now() / (5 * 60 * 1000)) % 5 === 0);
+            magi.currentAction = `Чат Титанов — мониторинг и ответы`;
+            magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, TITANS_CHAT_URL, 'titans', sendTitansChatFn, forceSpeak, data);
         }
     }
     if (isForumLearning(data)) {
         forumTickCount++;
-        if (forumTickCount >= Math.floor((FORUM_TICK_MIN * 60) / 5)) {
+        if (forumTickCount >= FORUM_TICK_THRESHOLD) {
             forumTickCount = 0;
+            magi.currentAction = `Форум — строит очередь тем...`;
+            magi.lastActionAt = new Date().toISOString();
             await readNextForumTopic(page, data);
         }
     }
