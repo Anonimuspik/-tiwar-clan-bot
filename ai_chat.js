@@ -65,9 +65,9 @@ function getKnowledgeArr(data) {
 // ── Groq API ──────────────────────────────────────────────────────────────────
 async function callGroq(messages, maxTokens = 120) {
     return new Promise((resolve) => {
-        if (!GROQ_API_KEY) { resolve(''); return; }
+        if (!GROQ_API_KEY) { console.log('[groq] GROQ_API_KEY не задан!'); resolve(''); return; }
         const body = JSON.stringify({
-            model: 'llama3-8b-8192',
+            model: 'llama-3.1-8b-instant',
             max_tokens: maxTokens,
             messages: [{ role: 'system', content: MAGI_SYSTEM_PROMPT }, ...messages],
         });
