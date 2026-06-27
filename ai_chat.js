@@ -322,8 +322,8 @@ async function shouldForceReply(page, url, chatType, data) {
 // ── Главный тик ───────────────────────────────────────────────────────────────
 async function tickAiChat(page, sendClanChatFn, sendTitansChatFn, data) {
     const magi = getMagi(data);
+    let didSomething = false;
 
-    // За один тик обрабатываем только ОДИН чат — чтобы не слать два сообщения подряд
     if (isAiClanEnabled(data)) {
         clanTickCount++;
         const shouldClanForced = await shouldForceReply(page, CLAN_CHAT_URL, 'clan', data);
@@ -332,40 +332,22 @@ async function tickAiChat(page, sendClanChatFn, sendTitansChatFn, data) {
             magi.currentAction = `Чат клана — мониторинг и ответы`;
             magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, CLAN_CHAT_URL, 'clan', sendClanChatFn, !shouldClanForced, data);
-            // После клана — выходим, титаны подождут следующего тика
-            if (isForumLearning(data)) {
-                forumTickCount++;
-                if (forumTickCount >= FORUM_TICK_THRESHOLD) {
-                    forumTickCount = 0;
-                    magi.currentAction = `Форум — строит очередь тем...`;
-                    magi.lastActionAt = new Date().toISOString();
-                    await readNextForumTopic(page, data);
-                }
-            }
-            return;
+            didSomething = true;
         }
     }
     if (isAiTitansEnabled(data)) {
         titansTickCount++;
-        const shouldTitansForced = await shouldForceReply(page, TITANS_CHAT_URL, 'titans', data);
-        if (shouldTitansForced || titansTickCount >= TITANS_TICK_THRESHOLD) {
+        // Отвечаем в титанов только если клан в этом тике НЕ отправил (чтобы не двойная отправка)
+        // Но счётчик растёт всегда
+        const shouldTitansForced = !didSomething && await shouldForceReply(page, TITANS_CHAT_URL, 'titans', data);
+        if (!didSomething && (shouldTitansForced || titansTickCount >= TITANS_TICK_THRESHOLD)) {
             titansTickCount = 0;
             magi.currentAction = `Чат Титанов — мониторинг и ответы`;
             magi.lastActionAt = new Date().toISOString();
             await processChatTick(page, TITANS_CHAT_URL, 'titans', sendTitansChatFn, !shouldTitansForced, data);
-            if (isForumLearning(data)) {
-                forumTickCount++;
-                if (forumTickCount >= FORUM_TICK_THRESHOLD) {
-                    forumTickCount = 0;
-                    magi.currentAction = `Форум — строит очередь тем...`;
-                    magi.lastActionAt = new Date().toISOString();
-                    await readNextForumTopic(page, data);
-                }
-            }
-            return;
+            didSomething = true;
         }
     }
-    // Если ни один чат не сработал — читаем форум
     if (isForumLearning(data)) {
         forumTickCount++;
         if (forumTickCount >= FORUM_TICK_THRESHOLD) {
