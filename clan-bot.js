@@ -733,7 +733,7 @@ async function processCommand(msg, msgOrig, senderNick, userId, botRank, member,
 
     // Команды управления ИИ-чатом и форумом
     const aiCmdReply = handleAiChatCommand(msg, botRank, data);
-    if (aiCmdReply !== null) return aiCmdReply;
+    if (aiCmdReply !== null) { await saveData(data); return aiCmdReply; }
 
     if (msg.includes('/помощь') || msg.includes('/команды')) {
         console.log('[cmd] → /помощь');
