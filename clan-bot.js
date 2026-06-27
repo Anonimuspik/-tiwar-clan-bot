@@ -1348,7 +1348,6 @@ async function banPlayer(page, targetNick, data) {
                 console.log('[mail] Не удалось восстановить страницу:', e2.message);
             }
         }
-        await saveData(data);
 
         // AI-чат + форум тик (каждые 5 сек)
         try {
@@ -1356,7 +1355,7 @@ async function banPlayer(page, targetNick, data) {
         } catch(e) {
             console.log('[ai-chat] ОШИБКА в тике:', e.message);
         }
-        // Сохраняем статус МАГИ (мысли, currentAction, lastActionAt) после каждого тика
+        // Одно сохранение на тик (mail + ai-chat вместе)
         await saveData(data);
 
         await page.waitForTimeout(TICK);
