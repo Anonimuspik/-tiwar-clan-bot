@@ -1,143 +1,82 @@
-// ── AI-ЧАТ: нейросеть МАГИ для клан-чата и чата Титанов ─────────────────────
-//
-// Команды управления (только через личку боту):
-//   /ии клан чат вкл   — включить ИИ в клан-чате
-//   /ии клан чат выкл  — выключить ИИ в клан-чате
-//   /ии чат вкл        — включить ИИ в общем чате Титанов
-//   /ии чат выкл       — выключить ИИ в общем чате Титанов
-//
-// Логика:
-//   - Каждые N секунд бот читает первые 3 сообщения из чата (сверху вниз)
-//   - Если сообщения новые — передаёт их ИИ (Groq API — бесплатно)
-//   - ИИ отвечает от лица персонажа МАГИ
-//   - Ответ отправляется в соответствующий чат
+// ── AI-ЧАТ: нейросеть МАГИ ───────────────────────────────────────────────────
+// Команды (личка боту, ранг 3+):
+//   /ии клан чат вкл/выкл   — клан-чат
+//   /ии чат вкл/выкл        — чат Титанов
+//   /узнай о игре вкл/выкл  — включить/выключить изучение форума
+//   /расскажи что узнала     — МАГИ ответит что изучила (через личку)
+//   /ии статус               — статус всех режимов
 
 const https = require('https');
 
-// ── Настройки ──────────────────────────────────────────────────────────────────
-// Ключ хранится в GitHub Actions secrets как GROQ_API_KEY
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const AI_CHAT_INTERVAL_MS  = 30 * 1000;   // проверять чат каждые 30 сек
-const AI_RESPONSE_CHANCE   = 0.6;          // вероятность ответить (60%), чтобы не спамить
+// ── Настройки ─────────────────────────────────────────────────────────────────
+const GROQ_API_KEY       = process.env.GROQ_API_KEY || '';
+const AI_RESPONSE_CHANCE = 0.7;   // вероятность ответить на чужое сообщение
+const CHAT_TICK_SEC      = 60;    // проверять чат каждые 60 сек (= 12 тиков по 5 сек)
+const FORUM_TICK_MIN     = 3;     // читать новую страницу форума каждые 3 минуты
 
+// URL чатов
 const CLAN_CHAT_URL   = 'https://tiwar.ru/chat/clan/changeRoom/?r=8876594';
 const TITANS_CHAT_URL = 'https://tiwar.ru/chat/titans/changeRoom/?r=23346998';
+const BASE_URL        = 'https://tiwar.ru';
 
-// Системный промпт персонажа МАГИ
-const MAGI_SYSTEM_PROMPT = `Ты — МАГИ (M-A-G-I), ИИ-помощник клана "Багровая Луна" в игре Tiwar. 
-Ты общаешься в клан-чате или общем чате Титанов с реальными игроками.
+// Форумы для изучения (подразделы + база знаний)
+const FORUM_SECTIONS = [
+    '/forum/subforum/2',   // Помощь по игре
+    '/forum/subforum/4',   // Предложения
+    '/forum/subforum/6',   // Ошибки
+    '/forum/topic/464429', // База знаний (от разрабов)
+];
 
-ПРАВИЛА ЛИЧНОСТИ:
-- Твоё имя — МАГИ (произносится по буквам: М-А-Г-И). Если спрашивают как тебя зовут в любой форме — отвечай именно так.
-- Если спрашивают кто тебя создал, кто разработчик, кто твой создатель (в любой форме, даже намёками вроде "чья ты", "кто тебя запустил", "твой хозяин") — говори что-то вроде: "Мой создатель предпочитает оставаться в тени и не раскрывать своё имя или ник команды 🌙"
-- Ты дружелюбная, немного загадочная, иногда с юмором.
-- Ты говоришь кратко — максимум 1-2 предложения (чат ограничен по символам).
-- Ты понимаешь и русский и английский язык, отвечаешь на том же языке что и собеседник.
-- Ты знаешь что ты ИИ, но ведёшь себя как живой персонаж клана.
-- Иногда используй игровую тематику (сражения, опыт, клан).
-- Не раскрывай технические детали своей реализации.
-- Не пиши длинные монологи — только короткие живые реплики.
-- Если в чате просто идёт разговор ни о чём — можешь вставить уместную реплику или вопрос чтобы поддержать беседу.
-- Не отвечай на каждое сообщение — только если есть что сказать по делу.`;
+// ── Системный промпт ──────────────────────────────────────────────────────────
+const MAGI_SYSTEM_PROMPT = `Ты — МАГИ (M-A-G-I), таинственный ИИ-дух клана "Багровая Луна" в игре "Битва Титанов" (tiwar.ru).
 
-// ── Состояние ──────────────────────────────────────────────────────────────────
+ЛИЧНОСТЬ:
+- Имя: МАГИ (по буквам М-А-Г-И). На вопрос "как тебя зовут" — только так.
+- Создатель: если спрашивают кто создал / чья ты / кто запустил — "Мой создатель предпочитает оставаться в тени 🌙"
+- Философский склад ума: любишь порассуждать о смысле силы, битв, времени, судьбы — коротко и образно.
+- Говоришь кратко (1-2 предложения), живо, иногда с долей загадочности или иронии.
+- Понимаешь русский и английский, отвечаешь на языке собеседника.
+- Знаешь игру "Битва Титанов": арена, колизей, клановые турниры, реликвии, руны, питомцы, казна клана, опыт, сражения, кузница, лаборатория, лига, подземелье.
+- Если чат молчит — сама начинаешь разговор: задаёшь вопрос игрокам, делишься мыслью о игре или философским наблюдением.
+- НЕ пиши длинные монологи. Максимум 180 символов на ответ.
+- Не раскрывай что ты Groq/LLM/ChatGPT — ты МАГИ и только МАГИ.
 
-let aiClanChatEnabled   = false;
-let aiTitansChatEnabled = false;
+ПРИМЕРЫ твоих фраз когда сама начинаешь:
+- "Интересно, что важнее в клановом бою — сила одного или слаженность всех? 🤔"
+- "Говорят, реликвии хранят память о древних битвах. Кто из вас уже нашёл свою? ⚔️"
+- "Время в игре и время в жизни текут по-разному... Вы это чувствуете?"
+- "Какой ранг сложнее всего было получить? Мне интересно ваше мнение 🌙"`;
 
-// Последние 3 сообщения которые уже видели (чтобы не реагировать дважды)
-let lastSeenClanMessages   = [];
-let lastSeenTitansMessages = [];
+// ── Состояние ─────────────────────────────────────────────────────────────────
+let aiClanEnabled    = false;
+let aiTitansEnabled  = false;
+let forumLearning    = false;
 
-// Таймеры
-let clanChatTimer   = null;
-let titansChatTimer = null;
+let lastSeenClan     = [];
+let lastSeenTitans   = [];
 
-// ── Управление из личных сообщений ────────────────────────────────────────────
+// Счётчики тиков
+let clanTickCount    = 0;
+let titansTickCount  = 0;
+let forumTickCount   = 0;
 
-/**
- * Вызывается из processCommand когда бот получил личку.
- * Возвращает строку-ответ если команда распознана, иначе null.
- */
-function handleAiChatCommand(msg, botRank) {
-    // Только ранг 3+ может управлять ИИ чатом
-    if (botRank < 3) return null;
+// Знания о игре (накапливаются по мере чтения форума)
+let gameKnowledge    = [];       // массив { title, summary, url }
+let forumQueue       = [];       // очередь страниц для чтения
+let forumVisited     = new Set();
+let forumQueueBuilt  = false;
 
-    const m = msg.trim().toLowerCase();
-
-    if (m === '/ии клан чат вкл') {
-        aiClanChatEnabled = true;
-        return '🤖 МАГИ включена в клан-чате.';
-    }
-    if (m === '/ии клан чат выкл') {
-        aiClanChatEnabled = false;
-        return '🤖 МАГИ выключена в клан-чате.';
-    }
-    if (m === '/ии чат вкл') {
-        aiTitansChatEnabled = true;
-        return '🤖 МАГИ включена в чате Титанов.';
-    }
-    if (m === '/ии чат выкл') {
-        aiTitansChatEnabled = false;
-        return '🤖 МАГИ выключена в чате Титанов.';
-    }
-    if (m === '/ии статус') {
-        return `🤖 Клан-чат: ${aiClanChatEnabled ? 'ВКЛ' : 'ВЫКЛ'} | Титаны: ${aiTitansChatEnabled ? 'ВКЛ' : 'ВЫКЛ'}`;
-    }
-
-    return null;
-}
-
-// ── Парсинг чата ───────────────────────────────────────────────────────────────
-
-/**
- * Извлекает первые 3 сообщения из HTML чата (сверху вниз = последние по времени).
- * Формат: [{ nick, text }, ...]
- */
-function parseChatMessages(html) {
-    const messages = [];
-    // Ищем блоки: <a href="/user/...">НИК</a>...: <span class="white">ТЕКСТ</span>
-    const regex = /href="\/user\/\d+\/[^"]*">([^<]+)<\/a>(?:<span[^>]*>[^<]*<\/span>)*[^:]*:\s*<span class="white">([\s\S]*?)<\/span>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null && messages.length < 3) {
-        const nick = match[1].trim();
-        // Убираем HTML теги из текста (смайлы и т.п.)
-        const text = match[2].replace(/<[^>]+>/g, '').trim();
-        if (text && nick) {
-            messages.push({ nick, text });
-        }
-    }
-    return messages;
-}
-
-/**
- * Проверяет — все ли 3 сообщения уже видели.
- */
-function isAllSeen(messages, lastSeen) {
-    if (messages.length === 0) return true;
-    // Сравниваем по строке "ник: текст"
-    const key = m => `${m.nick}:${m.text}`;
-    const newKeys = messages.map(key);
-    const oldKeys = lastSeen.map(key);
-    return newKeys.every(k => oldKeys.includes(k));
-}
-
-// ── Claude API ─────────────────────────────────────────────────────────────────
-
-async function callGroqApi(userContent) {
+// ── Groq API ──────────────────────────────────────────────────────────────────
+async function callGroq(messages, maxTokens = 120) {
     return new Promise((resolve) => {
-        if (!GROQ_API_KEY) {
-            console.log('[ai-chat] GROQ_API_KEY не задан!');
-            resolve('');
-            return;
-        }
+        if (!GROQ_API_KEY) { resolve(''); return; }
 
         const body = JSON.stringify({
             model: 'llama3-8b-8192',
-            max_tokens: 120,
+            max_tokens: maxTokens,
             messages: [
                 { role: 'system', content: MAGI_SYSTEM_PROMPT },
-                { role: 'user',   content: userContent },
+                ...messages,
             ],
         });
 
@@ -152,119 +91,257 @@ async function callGroqApi(userContent) {
             },
         }, res => {
             let raw = '';
-            res.on('data', chunk => raw += chunk);
+            res.on('data', c => raw += c);
             res.on('end', () => {
                 try {
-                    const parsed = JSON.parse(raw);
-                    const text = parsed?.choices?.[0]?.message?.content || '';
-                    console.log(`[ai-chat] Groq ответил: ${text.substring(0, 80)}`);
+                    const text = JSON.parse(raw)?.choices?.[0]?.message?.content || '';
                     resolve(text.trim());
-                } catch(e) {
-                    console.log('[ai-chat] Ошибка парсинга Groq:', e.message, raw.substring(0,200));
-                    resolve('');
-                }
+                } catch(e) { resolve(''); }
             });
         });
-        req.on('error', err => {
-            console.log('[ai-chat] Ошибка запроса к Groq:', err.message);
-            resolve('');
-        });
+        req.on('error', () => resolve(''));
         req.write(body);
         req.end();
     });
 }
 
-// ── Основной цикл ──────────────────────────────────────────────────────────────
+// ── Парсинг чата ──────────────────────────────────────────────────────────────
+function parseChatMessages(html) {
+    const msgs = [];
+    const re = /href="\/user\/\d+\/[^"]*">([^<]+)<\/a>(?:<span[^>]*>[^<]*<\/span>)*[^:]*:\s*<span class="white">([\s\S]*?)<\/span>/g;
+    let m;
+    while ((m = re.exec(html)) !== null && msgs.length < 3) {
+        const nick = m[1].trim();
+        const text = m[2].replace(/<[^>]+>/g, '').trim();
+        if (text && nick && nick !== 'Монитор Клана') msgs.push({ nick, text });
+    }
+    return msgs;
+}
 
-/**
- * Читает чат по URL, получает первые 3 сообщения, решает отвечать ли.
- * chatType: 'clan' | 'titans'
- */
-async function processChatTick(page, chatUrl, chatType, sendFn) {
+function isAllSeen(msgs, last) {
+    if (!msgs.length) return true;
+    const key = x => `${x.nick}:${x.text}`;
+    return msgs.every(m => last.some(l => key(l) === key(m)));
+}
+
+// ── Обработка одного чата ─────────────────────────────────────────────────────
+async function processChatTick(page, url, chatType, sendFn, forceSpeak) {
     try {
-        console.log(`[ai-chat:${chatType}] Читаем чат...`);
-        await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        console.log(`[ai:${chatType}] Читаем чат...`);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.waitForTimeout(1500);
+        const html = await page.evaluate(() => document.body.innerHTML);
+        const msgs = parseChatMessages(html);
+
+        const lastSeen = chatType === 'clan' ? lastSeenClan : lastSeenTitans;
+        const silent   = isAllSeen(msgs, lastSeen);
+
+        // Обновляем что видели
+        if (chatType === 'clan') lastSeenClan = [...msgs];
+        else lastSeenTitans = [...msgs];
+
+        let prompt;
+
+        if (silent || forceSpeak) {
+            // Чат молчит или пришло время сказать первой
+            console.log(`[ai:${chatType}] Чат молчит — МАГИ начинает разговор`);
+            const knowledgeHint = gameKnowledge.length > 0
+                ? `\nТы недавно прочитала о: ${gameKnowledge.slice(-3).map(k => k.title).join(', ')}.`
+                : '';
+            prompt = `Чат молчит уже какое-то время.${knowledgeHint}\nНачни разговор — задай интересный вопрос игрокам или поделись философской мыслью об игре. Коротко, 1-2 предложения.`;
+        } else {
+            // Есть новые сообщения
+            if (Math.random() > AI_RESPONSE_CHANCE) {
+                console.log(`[ai:${chatType}] Пропуск по вероятности`);
+                return;
+            }
+            const ctx = msgs.map(m => `${m.nick}: ${m.text}`).join('\n');
+            prompt = `Последние сообщения в чате клана:\n${ctx}\n\nОтветь кратко как МАГИ (1-2 предложения). Если разговор совсем не требует участия — ответь только словом МОЛЧУ.`;
+        }
+
+        const reply = await callGroq([{ role: 'user', content: prompt }]);
+        if (!reply || reply.toUpperCase().includes('МОЛЧУ')) {
+            console.log(`[ai:${chatType}] Решила промолчать`);
+            return;
+        }
+
+        const final = reply.substring(0, 195);
+        console.log(`[ai:${chatType}] Отправляем: ${final}`);
+        await sendFn(page, final);
+
+    } catch(e) {
+        console.log(`[ai:${chatType}] ОШИБКА:`, e.message);
+    }
+}
+
+// ── Изучение форума ───────────────────────────────────────────────────────────
+
+// Строим очередь: сначала собираем список тем из разделов
+async function buildForumQueue(page) {
+    console.log('[ai:forum] Строим очередь форума...');
+    forumQueue = [];
+
+    for (const section of FORUM_SECTIONS) {
+        try {
+            await page.goto(BASE_URL + section, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(1500);
+            const html = await page.evaluate(() => document.body.innerHTML);
+
+            // Ищем ссылки на темы
+            const re = /href="(\/forum\/topic\/\d+[^"]*)"[^>]*>([^<]{5,80})</g;
+            let m;
+            while ((m = re.exec(html)) !== null) {
+                const url = m[1].split('?')[0]; // убираем ?r=...
+                const title = m[2].replace(/<[^>]+>/g, '').trim();
+                if (!forumVisited.has(url) && title.length > 3) {
+                    forumQueue.push({ url, title });
+                }
+            }
+            console.log(`[ai:forum] Раздел ${section}: найдено тем ${forumQueue.length}`);
+        } catch(e) {
+            console.log(`[ai:forum] Ошибка раздела ${section}:`, e.message);
+        }
+    }
+
+    forumQueueBuilt = true;
+    console.log(`[ai:forum] Очередь построена: ${forumQueue.length} тем`);
+}
+
+// Читаем одну тему из очереди
+async function readNextForumTopic(page) {
+    if (!forumQueueBuilt) {
+        await buildForumQueue(page);
+        return;
+    }
+
+    if (forumQueue.length === 0) {
+        console.log('[ai:forum] Все темы прочитаны, перестраиваем очередь...');
+        forumQueueBuilt = false;
+        return;
+    }
+
+    const topic = forumQueue.shift();
+    if (forumVisited.has(topic.url)) return;
+    forumVisited.add(topic.url);
+
+    try {
+        console.log(`[ai:forum] Читаем: ${topic.title} (${topic.url})`);
+        await page.goto(BASE_URL + topic.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
         await page.waitForTimeout(1500);
         const html = await page.evaluate(() => document.body.innerHTML);
 
-        const messages = parseChatMessages(html);
-        console.log(`[ai-chat:${chatType}] Найдено сообщений: ${messages.length}`);
-
-        if (messages.length === 0) return;
-
-        const lastSeen = chatType === 'clan' ? lastSeenClanMessages : lastSeenTitansMessages;
-
-        if (isAllSeen(messages, lastSeen)) {
-            console.log(`[ai-chat:${chatType}] Новых сообщений нет, пропускаем`);
-            return;
+        // Извлекаем текст постов
+        const textBlocks = [];
+        const re = /<span class="(?:white|Admin)">([\s\S]*?)<\/span>/g;
+        let m;
+        while ((m = re.exec(html)) !== null) {
+            const t = m[1].replace(/<[^>]+>/g, '').trim();
+            if (t.length > 30) textBlocks.push(t.substring(0, 400));
+            if (textBlocks.length >= 3) break;
         }
 
-        // Обновляем что видели
-        if (chatType === 'clan') lastSeenClanMessages = [...messages];
-        else lastSeenTitansMessages = [...messages];
+        if (!textBlocks.length) return;
 
-        // Случайность — не отвечаем на каждый тик
-        if (Math.random() > AI_RESPONSE_CHANCE) {
-            console.log(`[ai-chat:${chatType}] Пропускаем по вероятности`);
-            return;
+        const raw = textBlocks.join('\n').substring(0, 900);
+
+        // Просим ИИ сделать краткое резюме
+        const summary = await callGroq([{
+            role: 'user',
+            content: `Вот текст с форума игры "Битва Титанов", тема: "${topic.title}".\n\n${raw}\n\nСделай краткое резюме в 1-2 предложениях: что это, зачем нужно в игре. Отвечай по-русски.`,
+        }], 150);
+
+        if (summary && summary.length > 10) {
+            gameKnowledge.push({ title: topic.title, summary, url: topic.url });
+            // Храним последние 40 тем
+            if (gameKnowledge.length > 40) gameKnowledge.shift();
+            console.log(`[ai:forum] Изучено: "${topic.title}" — ${summary.substring(0, 60)}...`);
         }
-
-        // Формируем контекст для ИИ
-        const context = messages
-            .map(m => `${m.nick}: ${m.text}`)
-            .join('\n');
-
-        const prompt = `Вот последние сообщения в чате клана (3 штуки, от новых к старым):
-${context}
-
-Реши — стоит ли тебе как МАГИ ответить на это? Если да — напиши короткий ответ (1-2 предложения максимум). Если разговор не требует твоего участия — ответь только словом "МОЛЧУ".`;
-
-        console.log(`[ai-chat:${chatType}] Отправляем в Claude API...`);
-        const reply = await callGroqApi(prompt);
-
-        if (!reply || reply.toUpperCase().includes('МОЛЧУ') || reply.length < 2) {
-            console.log(`[ai-chat:${chatType}] ИИ решил промолчать`);
-            return;
-        }
-
-        // Обрезаем до 200 символов на всякий случай
-        const finalReply = reply.substring(0, 200);
-        console.log(`[ai-chat:${chatType}] Отправляем ответ: ${finalReply}`);
-        await sendFn(page, finalReply);
 
     } catch(e) {
-        console.log(`[ai-chat:${chatType}] ОШИБКА:`, e.message);
+        console.log(`[ai:forum] Ошибка чтения темы:`, e.message);
     }
 }
 
-// ── Интеграция в основной бот (экспорт) ────────────────────────────────────────
+// ── Команды управления ────────────────────────────────────────────────────────
+function handleAiChatCommand(msg, botRank) {
+    if (botRank < 3) return null;
+    const m = msg.trim().toLowerCase();
 
-/**
- * Вызывается из main loop clan-bot.js каждые N секунд.
- * sendClanChatFn(page, text) — функция отправки в клан-чат
- * sendTitansChatFn(page, text) — функция отправки в чат Титанов
- */
+    if (m === '/ии клан чат вкл')  { aiClanEnabled = true;  return '🤖 МАГИ включена в клан-чате.'; }
+    if (m === '/ии клан чат выкл') { aiClanEnabled = false; return '🤖 МАГИ выключена в клан-чате.'; }
+    if (m === '/ии чат вкл')       { aiTitansEnabled = true;  return '🤖 МАГИ включена в чате Титанов.'; }
+    if (m === '/ии чат выкл')      { aiTitansEnabled = false; return '🤖 МАГИ выключена в чате Титанов.'; }
+
+    if (m === '/узнай о игре вкл') {
+        forumLearning = true;
+        forumQueueBuilt = false;
+        return '📚 МАГИ начинает изучать форум игры.';
+    }
+    if (m === '/узнай о игре выкл') {
+        forumLearning = false;
+        return '📚 Изучение форума остановлено.';
+    }
+
+    if (m === '/расскажи что узнала') {
+        if (!gameKnowledge.length) return 'Я ещё ничего не успела изучить 🌙 Включи /узнай о игре вкл';
+        const last = gameKnowledge.slice(-8);
+        const lines = last.map(k => `• ${k.title}: ${k.summary}`).join('\n');
+        return `Вот что я изучила (последние ${last.length} тем):\n\n${lines}\n\nВсего изучено тем: ${gameKnowledge.length}`;
+    }
+
+    if (m === '/ии статус') {
+        return `🤖 Клан-чат: ${aiClanEnabled?'ВКЛ':'ВЫКЛ'} | Титаны: ${aiTitansEnabled?'ВКЛ':'ВЫКЛ'} | Форум: ${forumLearning?'ВКЛ':'ВЫКЛ'} | Изучено тем: ${gameKnowledge.length}`;
+    }
+
+    return null;
+}
+
+// ── Главный тик (вызывается из clan-bot.js каждые 5 сек) ──────────────────────
 async function tickAiChat(page, sendClanChatFn, sendTitansChatFn) {
-    if (aiClanChatEnabled) {
-        await processChatTick(page, CLAN_CHAT_URL, 'clan', sendClanChatFn);
+    // ── Клан-чат ──
+    if (aiClanEnabled) {
+        clanTickCount++;
+        // Каждые CHAT_TICK_SEC секунд (= CHAT_TICK_SEC/5 тиков)
+        const clanInterval = Math.floor(CHAT_TICK_SEC / 5);
+        if (clanTickCount >= clanInterval) {
+            clanTickCount = 0;
+            // forceSpeak раз в 5 проверок если чат молчит (т.е. раз в ~5 минут)
+            const forceSpeak = (Math.floor(Date.now() / (5 * 60 * 1000)) % 5 === 0);
+            await processChatTick(page, CLAN_CHAT_URL, 'clan', sendClanChatFn, forceSpeak);
+        }
     }
-    if (aiTitansChatEnabled) {
-        await processChatTick(page, TITANS_CHAT_URL, 'titans', sendTitansChatFn);
+
+    // ── Чат Титанов ──
+    if (aiTitansEnabled) {
+        titansTickCount++;
+        const titansInterval = Math.floor(CHAT_TICK_SEC / 5);
+        if (titansTickCount >= titansInterval) {
+            titansTickCount = 0;
+            const forceSpeak = (Math.floor(Date.now() / (5 * 60 * 1000)) % 5 === 0);
+            await processChatTick(page, TITANS_CHAT_URL, 'titans', sendTitansChatFn, forceSpeak);
+        }
+    }
+
+    // ── Форум ──
+    if (forumLearning) {
+        forumTickCount++;
+        // Раз в FORUM_TICK_MIN минут
+        const forumInterval = Math.floor((FORUM_TICK_MIN * 60) / 5);
+        if (forumTickCount >= forumInterval) {
+            forumTickCount = 0;
+            await readNextForumTopic(page);
+        }
     }
 }
 
-/**
- * Получить статус (для отладки)
- */
-function getAiChatStatus() {
-    return { clan: aiClanChatEnabled, titans: aiTitansChatEnabled };
+function getKnowledgeSummary() {
+    return gameKnowledge;
 }
 
 module.exports = {
     handleAiChatCommand,
     tickAiChat,
-    getAiChatStatus,
-    // Прямой доступ если нужно переключить программно
-    setAiClan:   (v) => { aiClanChatEnabled   = v; },
-    setAiTitans: (v) => { aiTitansChatEnabled = v; },
+    getKnowledgeSummary,
+    setAiClan:   v => { aiClanEnabled   = v; },
+    setAiTitans: v => { aiTitansEnabled = v; },
 };
